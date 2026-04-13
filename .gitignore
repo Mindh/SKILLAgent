@@ -7,8 +7,6 @@ __pycache__/
 # 환경 변수 (API 키 포함 — 절대 커밋 금지)
 .env
 
-# 임베딩 캐시 (크기가 크고 실행 시 자동 재생성됨)
-skills/skill_registry.json
 
 # 분석/계획 문서 (작업용 임시 파일)
 analysis_results.md
