@@ -1,0 +1,7 @@
+max_iterations: 3
+pass_threshold: 7
+force_exit_on_max: true
+context_window: last_2
+temperature: 0
+skill_retrieval_top_k: 3
+skill_retrieval_mode: embedding
