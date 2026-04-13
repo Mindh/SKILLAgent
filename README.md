@@ -3,7 +3,34 @@
 모듈형 스킬 레지스트리 기반의 **ReAct(Reasoning and Acting) 에이전틱 AI** 시스템입니다.
 사용자의 요청을 분석하여 적절한 스킬을 동적으로 선택·실행하고, 결과를 스스로 평가·개선하는 자율 실행 루프를 갖추고 있습니다.
 
+> **GitHub**: https://github.com/Mindh/SKILLAgent
+
 ---
+
+## 빠른 시작 (Linux 서버 클론 배포)
+
+```bash
+# 1. 클론
+git clone https://github.com/Mindh/SKILLAgent.git
+cd SKILLAgent
+
+# 2. 패키지 설치
+pip install -r requirements.txt
+
+# 3. API 키 설정
+cp .env.example .env
+nano .env          # GEMINI_API_KEY=여기에_키_입력
+
+# 4. 실행
+python runner/run.py                          # 대화형 모드
+python runner/run.py "이 텍스트를 번역해줘"   # 단일 실행 모드
+```
+
+> **첫 실행 시** `ensure_index_ready()`가 자동으로 스킬 임베딩을 계산하고
+> `skills/skill_registry.json`에 캐싱합니다. 이후 실행부터는 API 재호출 없이 즉시 사용됩니다.
+
+---
+
 
 ## 디렉토리 구조
 
