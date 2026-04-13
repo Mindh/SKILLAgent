@@ -1,10 +1,7 @@
 # Skill Base AI - 의존성 패키지
 
-# LLM API 클라이언트 (Gemini / OpenAI 호환 엔드포인트)
+# LLM API 클라이언트 (OpenAI 호환 엔드포인트 - 로컬 서버 포함)
 openai
-
-# Gemini Native Embedding API
-google-genai
 
 # 환경변수 파일(.env) 자동 로드
 python-dotenv
