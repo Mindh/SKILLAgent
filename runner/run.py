@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -50,7 +51,11 @@ def run(user_input: str, history: list = None, global_state: dict = None) -> dic
         global_state = {}
     
     # 스킬 임베딩 인덱스 초기화 (캐싱된 경우 API 재호출 없음)
-    ensure_index_ready()
+    # 임베딩 모델이 없어도 keyword 폴백으로 정상 동작
+    try:
+        ensure_index_ready()
+    except Exception as e:
+        log(f"[Warning] 인덱스 초기화 중 오류 발생 (keyword 폴백으로 동작): {e}")
         
     config = load_config()
     log(f"설정 로드 완료: {config}")

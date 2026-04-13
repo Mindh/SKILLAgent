@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import json
 from runner.utils import load_file, log, parse_json, build_chat_history
 from runner.llm import call_ai

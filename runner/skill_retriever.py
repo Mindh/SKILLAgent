@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 skill_retriever.py
 ──────────────────
@@ -27,7 +28,7 @@ EMBEDDING_MODEL = "gemini-embedding-001"
 _GEMINI_API_KEY = None   # llm.py와 동일한 키를 런타임에 주입
 
 # ── 인메모리 캐시 (프로세스 수명 동안 유지) ──────────────────────────
-_skill_index: list[dict] | None = None   # [{skill_id, name, description, embedding, ...}]
+_skill_index = None   # [{skill_id, name, description, embedding, ...}]
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -80,7 +81,7 @@ def _save_registry_json(skills: list[dict]) -> None:
 # 공개 API
 # ════════════════════════════════════════════════════════════════════
 
-def get_embedding(text: str) -> list[float] | None:
+def get_embedding(text):
     """
     Gemini Embedding API를 호출하여 텍스트 임베딩 벡터를 반환합니다.
     최신 google-genai SDK(google.genai)를 사용합니다.
@@ -111,11 +112,12 @@ def get_embedding(text: str) -> list[float] | None:
         return None
 
 
-def ensure_index_ready() -> None:
+def ensure_index_ready():
     """
     애플리케이션 시작 시 1회 호출.
-    skill_registry.json에서 embedding=null인 스킬만 임베딩을 계산하여 캐싱합니다.
+    skill_registry.json을 로드하고, embedding=null인 스킬만 임베딩을 시도합니다.
     이미 임베딩된 스킬은 API를 재호출하지 않습니다.
+    임베딩 모델이 없어도 JSON 로드까지는 반드시 성공하여 keyword 폴백이 동작합니다.
     """
     global _skill_index
 
@@ -125,30 +127,41 @@ def ensure_index_ready() -> None:
         _skill_index = []
         return
 
+    # 이미 캐싱된 임베딩 수 확인
+    cached_count = sum(1 for s in skills if s.get("embedding") is not None)
+    total_count = len(skills)
+    log(f"[Retriever] 스킬 {total_count}개 로드됨 (임베딩 캐시: {cached_count}/{total_count})")
+
+    # 임베딩이 없는 스킬만 API 호출 시도 (실패해도 계속 진행)
     updated = False
     for skill in skills:
         if skill.get("embedding") is None:
-            # 임베딩 대상 텍스트: name + description + keywords 결합
-            embed_text = (
-                f"{skill.get('name', '')} "
-                f"{skill.get('description', '')} "
-                f"{' '.join(skill.get('trigger_keywords', []))}"
-            )
-            log(f"[Retriever] '{skill['skill_id']}' 임베딩 계산 중...")
-            vec = get_embedding(embed_text)
-            if vec is not None:
-                skill["embedding"] = vec
-                updated = True
-                log(f"[Retriever] '{skill['skill_id']}' 임베딩 완료 (dim={len(vec)})")
-            else:
-                log(f"[Retriever] '{skill['skill_id']}' 임베딩 실패 → keyword 폴백 모드로 동작")
+            try:
+                embed_text = (
+                    f"{skill.get('name', '')} "
+                    f"{skill.get('description', '')} "
+                    f"{' '.join(skill.get('trigger_keywords', []))}"
+                )
+                log(f"[Retriever] '{skill['skill_id']}' 임베딩 계산 시도...")
+                vec = get_embedding(embed_text)
+                if vec is not None:
+                    skill["embedding"] = vec
+                    updated = True
+                    log(f"[Retriever] '{skill['skill_id']}' 임베딩 완료 (dim={len(vec)})")
+                else:
+                    log(f"[Retriever] '{skill['skill_id']}' 임베딩 불가 (모델 미설치) -> keyword 폴백 사용")
+            except Exception as e:
+                log(f"[Retriever] '{skill['skill_id']}' 임베딩 오류: {e} -> 건너뜀")
 
     if updated:
-        _save_registry_json(skills)
-        log("[Retriever] skill_registry.json에 임베딩 캐시 저장 완료")
+        try:
+            _save_registry_json(skills)
+            log("[Retriever] skill_registry.json에 임베딩 캐시 저장 완료")
+        except Exception as e:
+            log(f"[Retriever] 캐시 저장 실패 (무시됨): {e}")
 
     _skill_index = skills
-    log(f"[Retriever] 인덱스 준비 완료. 총 {len(_skill_index)}개 스킬 로드됨.")
+    log(f"[Retriever] 인덱스 준비 완료. 총 {total_count}개 스킬 (임베딩: {cached_count + (sum(1 for s in skills if s.get('embedding')) - cached_count)}개)")
 
 
 def _keyword_fallback(query: str, skills: list[dict], k: int) -> list[dict]:
@@ -213,9 +226,12 @@ def retrieve_top_k_skills(query: str, k: int = 3, mode: str = "embedding") -> st
         selected = _keyword_fallback(query, skills, k)
         return format_registry_block(selected)
 
-    query_vec = get_embedding(query)
+    try:
+        query_vec = get_embedding(query)
+    except Exception:
+        query_vec = None
     if query_vec is None:
-        log("[Retriever] 쿼리 임베딩 실패 → keyword 폴백")
+        log("[Retriever] 쿼리 임베딩 불가 (모델 미설치 또는 API 오류) -> keyword 폴백으로 전환")
         selected = _keyword_fallback(query, skills, k)
         return format_registry_block(selected)
 
