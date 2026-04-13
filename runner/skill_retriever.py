@@ -52,7 +52,7 @@ def _get_api_key() -> str:
     return key
 
 
-def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
+def _cosine_similarity(vec_a, vec_b):
     """순수 Python(numpy 없이)으로 코사인 유사도 계산."""
     dot = sum(a * b for a, b in zip(vec_a, vec_b))
     norm_a = math.sqrt(sum(a * a for a in vec_a))
@@ -62,7 +62,7 @@ def _cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
-def _load_registry_json() -> list[dict]:
+def _load_registry_json():
     """skill_registry.json을 로드합니다."""
     if not os.path.exists(REGISTRY_JSON_PATH):
         log(f"[Retriever] skill_registry.json 없음: {REGISTRY_JSON_PATH}")
@@ -71,7 +71,7 @@ def _load_registry_json() -> list[dict]:
         return json.load(f)
 
 
-def _save_registry_json(skills: list[dict]) -> None:
+def _save_registry_json(skills):
     """임베딩이 채워진 스킬 리스트를 skill_registry.json에 저장합니다."""
     with open(REGISTRY_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(skills, f, ensure_ascii=False, indent=2)
@@ -164,7 +164,7 @@ def ensure_index_ready():
     log(f"[Retriever] 인덱스 준비 완료. 총 {total_count}개 스킬 (임베딩: {cached_count + (sum(1 for s in skills if s.get('embedding')) - cached_count)}개)")
 
 
-def _keyword_fallback(query: str, skills: list[dict], k: int) -> list[dict]:
+def _keyword_fallback(query, skills, k):
     """
     임베딩 없이 trigger_keywords 단순 매칭으로 Top-K 스킬을 반환합니다.
     매칭 없으면 전체 스킬을 반환합니다.
@@ -248,7 +248,7 @@ def retrieve_top_k_skills(query: str, k: int = 3, mode: str = "embedding") -> st
     return format_registry_block(selected)
 
 
-def format_registry_block(skills: list[dict]) -> str:
+def format_registry_block(skills):
     """
     스킬 리스트를 router_prompt의 {REGISTRY_CONTENT} 자리에 삽입할
     마크다운 텍스트 블록으로 변환합니다. (기존 skill_registry.md 형식과 동일)
@@ -274,7 +274,7 @@ def format_registry_block(skills: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def get_all_valid_skill_ids() -> list[str]:
+def get_all_valid_skill_ids():
     """
     router.py의 valid_ids 하드코딩을 대체.
     skill_registry.json에서 모든 skill_id를 동적으로 반환합니다.
