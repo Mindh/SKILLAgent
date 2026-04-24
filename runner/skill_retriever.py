@@ -40,14 +40,13 @@ def _get_api_key() -> str:
     global _GEMINI_API_KEY
     if _GEMINI_API_KEY:
         return _GEMINI_API_KEY
-    # 환경변수 우선, 없으면 llm.py 상수에서 가져옴
-    key = os.environ.get("GEMINI_API_KEY", "")
-    if not key:
-        try:
-            from runner.llm import GEMINI_API_KEY as hardcoded_key
-            key = hardcoded_key
-        except ImportError:
-            pass
+    # llm 모듈을 먼저 import하여 dotenv가 .env를 os.environ에 주입하도록 함.
+    try:
+        from runner.llm import GEMINI_API_KEY as hardcoded_key
+    except ImportError:
+        hardcoded_key = ""
+    # 환경변수 우선, 없으면 llm.py의 하드코딩된 키 사용
+    key = os.environ.get("GEMINI_API_KEY", "") or hardcoded_key
     _GEMINI_API_KEY = key
     return key
 
