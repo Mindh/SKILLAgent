@@ -5,3 +5,5 @@ context_window: last_2
 temperature: 0
 skill_retrieval_top_k: 3
 skill_retrieval_mode: embedding
+agent_retrieval_top_k: 3
+enable_resume_hint: true

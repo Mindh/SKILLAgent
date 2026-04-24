@@ -25,6 +25,8 @@ def load_config() -> dict:
         "temperature": float(config.get("temperature", 0)),
         "skill_retrieval_top_k": int(config.get("skill_retrieval_top_k", 3)),
         "skill_retrieval_mode": config.get("skill_retrieval_mode", "full"),
+        "agent_retrieval_top_k": int(config.get("agent_retrieval_top_k", 3)),
+        "enable_resume_hint": config.get("enable_resume_hint", "true").lower() == "true",
     }
 
 # ── 파싱 및 유틸 ────────────────────────────────────────────
