@@ -11,7 +11,7 @@ supervisor.py
 """
 
 import json
-from runner.utils import load_file, log, parse_json, build_chat_history
+from runner.utils import cached_file, log, parse_json, build_chat_history
 from runner.llm import call_ai
 from runner.components import run_skill
 from runner.skill_retriever import retrieve_top_k_skills
@@ -104,8 +104,8 @@ def _build_supervisor_input(user_input: str, session: dict, config: dict) -> str
 
 
 def _decide(user_input: str, session: dict, config: dict) -> dict:
-    base_system = load_file("prompts/base_system.md")
-    template = load_file("prompts/supervisor_prompt.md")
+    base_system = cached_file("prompts/base_system.md")
+    template = cached_file("prompts/supervisor_prompt.md")
     sup_input = _build_supervisor_input(user_input, session, config)
     prompt = template.replace("{SUPERVISOR_INPUT}", sup_input)
 
@@ -246,7 +246,7 @@ def _format_skill_response(skill_id: str, parsed, raw: str) -> str:
 
 
 def _do_chat(user_input: str, session: dict, config: dict) -> str:
-    base_system = load_file("prompts/base_system.md")
+    base_system = cached_file("prompts/base_system.md")
     history = session.get("history", [])
     if history:
         prompt = f"[최근 대화]\n{build_chat_history(history)}\n\n[사용자 입력]\n{user_input}"
@@ -256,28 +256,47 @@ def _do_chat(user_input: str, session: dict, config: dict) -> str:
 
 
 # ──────────────────────────────────────────────────────────────
-# 턴 디스패치
+# Handlers (action별 분기)
 # ──────────────────────────────────────────────────────────────
-def _dispatch(user_input: str, session: dict, config: dict, depth: int = 0) -> str:
-    decision = _decide(user_input, session, config)
-    action = decision["action"]
+def _resolve_pending_switch(decision: dict, session: dict) -> None:
+    """
+    pending_switch가 있는 상태에서 사용자가 명시적으로 승인한 switch가
+    아니면 해제한다. 승인 분기는 _handle_switch에서 처리.
+    """
+    pending = session.get("pending_switch")
+    if not pending:
+        return
+    if decision["action"] == "switch_agent" and decision.get("user_confirmed"):
+        return  # _handle_switch에서 소비
+    log("[Supervisor] pending_switch 해제 (사용자 거부 또는 다른 요청)")
+    session["pending_switch"] = None
+
+
+def _maybe_append_resume_hint(msg: str, decision: dict, session: dict) -> str:
+    if decision.get("resume_hint_after") and session.get("active_agent"):
+        msg += _resume_hint(session["active_agent"])
+    return msg
+
+
+def _handle_continue(decision, user_input, session, config, depth):
+    return _do_continue_agent(user_input, session, config, depth=depth)
+
+
+def _handle_switch(decision, user_input, session, config, depth):
     target = decision.get("target")
     pending = session.get("pending_switch")
 
-    # pending_switch가 있는 상태에서 사용자가 부정/무관 응답을 하면 pending 해제
-    if pending and not (action == "switch_agent" and decision.get("user_confirmed")):
-        log("[Supervisor] pending_switch 해제 (사용자 거부 또는 다른 요청)")
+    # 1) 사용자 승인 직후 → 실제 전환
+    if decision.get("user_confirmed") and pending:
+        target = pending["target"]
         session["pending_switch"] = None
+        return _do_switch_agent(target, user_input, session, config, depth=depth)
 
-    # switch_agent + 사용자 확인 승인 → 실제 전환 수행
-    if action == "switch_agent" and decision.get("user_confirmed") and pending:
-        return _do_switch_agent(pending["target"], user_input, session, config, depth=depth)
-
-    # switch_agent + 확인 필요 → 질문만 하고 pending 기록
-    if action == "switch_agent" and decision.get("user_confirm_needed"):
-        current = session.get("active_agent")
+    # 2) 확인 필요 → 질문만 남기고 pending 기록
+    if decision.get("user_confirm_needed"):
         target_def = get_agent_by_id(target) if target else None
         target_name = target_def.get("name") if target_def else target
+        current = session.get("active_agent")
         current_def = get_agent_by_id(current["agent_id"]) if current else None
         current_name = current_def.get("name") if current_def else ""
         session["pending_switch"] = {"target": target}
@@ -285,23 +304,36 @@ def _dispatch(user_input: str, session: dict, config: dict, depth: int = 0) -> s
             return f"현재 '{current_name}' 업무를 잠시 중단하고 '{target_name}'(으)로 전환할까요?"
         return f"'{target_name}' 업무로 시작할까요?"
 
-    if action == "switch_agent":
-        return _do_switch_agent(target, user_input, session, config, depth=depth)
+    # 3) 즉시 전환
+    return _do_switch_agent(target, user_input, session, config, depth=depth)
 
-    if action == "continue_agent":
-        return _do_continue_agent(user_input, session, config, depth=depth)
 
-    if action == "call_skill":
-        msg = _do_call_skill(target, user_input, session, config)
-        if decision.get("resume_hint_after") and session.get("active_agent"):
-            msg += _resume_hint(session["active_agent"])
-        return msg
+def _handle_call_skill(decision, user_input, session, config, depth):
+    msg = _do_call_skill(decision.get("target"), user_input, session, config)
+    return _maybe_append_resume_hint(msg, decision, session)
 
-    # chat
+
+def _handle_chat(decision, user_input, session, config, depth):
     msg = _do_chat(user_input, session, config)
-    if decision.get("resume_hint_after") and session.get("active_agent"):
-        msg += _resume_hint(session["active_agent"])
-    return msg
+    return _maybe_append_resume_hint(msg, decision, session)
+
+
+_HANDLERS = {
+    "continue_agent": _handle_continue,
+    "switch_agent":   _handle_switch,
+    "call_skill":     _handle_call_skill,
+    "chat":           _handle_chat,
+}
+
+
+# ──────────────────────────────────────────────────────────────
+# 턴 디스패치
+# ──────────────────────────────────────────────────────────────
+def _dispatch(user_input: str, session: dict, config: dict, depth: int = 0) -> str:
+    decision = _decide(user_input, session, config)
+    _resolve_pending_switch(decision, session)
+    handler = _HANDLERS.get(decision["action"], _handle_chat)
+    return handler(decision, user_input, session, config, depth)
 
 
 # ──────────────────────────────────────────────────────────────
