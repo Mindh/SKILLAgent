@@ -10,6 +10,17 @@ def load_file(path: str) -> str:
     with open(os.path.join(BASE_DIR, path), "r", encoding="utf-8") as f:
         return f.read()
 
+# 런타임 불변 텍스트(프롬프트, agent definition 등)를 메모이즈.
+# 키는 path 그대로. 파일 핫리로드가 필요하면 load_file을 사용.
+_FILE_CACHE: dict = {}
+
+def cached_file(path: str) -> str:
+    if path in _FILE_CACHE:
+        return _FILE_CACHE[path]
+    content = load_file(path)
+    _FILE_CACHE[path] = content
+    return content
+
 def load_config() -> dict:
     raw = load_file("prompts/loop_config.md")
     config = {}

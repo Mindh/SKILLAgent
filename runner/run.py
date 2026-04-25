@@ -10,11 +10,21 @@ except Exception:
 from runner.utils import load_config, log
 from runner.skill_retriever import ensure_index_ready
 from runner.agent_retriever import ensure_agent_index_ready
+from runner.embeddings import embedding_available
 from runner import supervisor
 
 
+_RUNTIME_INITIALIZED = False
+
+
 def _init_runtime():
-    """스킬/에이전트 임베딩 인덱스 초기화. 임베딩 실패해도 keyword 폴백으로 계속."""
+    """스킬/에이전트 임베딩 인덱스 초기화 (프로세스당 1회).
+    임베딩이 불가능한 환경이면 retriever들이 자동으로 keyword 모드로 전환된다.
+    """
+    global _RUNTIME_INITIALIZED
+    if _RUNTIME_INITIALIZED:
+        return
+    log(f"[Runtime] embedding_available = {embedding_available()}")
     try:
         ensure_index_ready()
     except Exception as e:
@@ -23,6 +33,7 @@ def _init_runtime():
         ensure_agent_index_ready()
     except Exception as e:
         log(f"[Warning] 에이전트 인덱스 초기화 중 오류 (폴백 사용): {e}")
+    _RUNTIME_INITIALIZED = True
 
 
 def run(user_input: str, session: dict = None) -> dict:

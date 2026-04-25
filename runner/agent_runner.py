@@ -19,7 +19,7 @@ Active agent의 한 턴 실행.
 """
 
 import json
-from runner.utils import load_file, log, parse_json, build_chat_history
+from runner.utils import cached_file, log, parse_json, build_chat_history
 from runner.llm import call_ai
 from runner.components import run_skill
 from runner.agent_retriever import get_agent_by_id, load_agent_prompt
@@ -59,7 +59,7 @@ def _build_agent_user_prompt(
 def _call_agent_llm(agent_def: dict, agent_state: dict, user_input: str,
                     history: list, config: dict, last_skill_result=None) -> dict:
     agent_id = agent_def["agent_id"]
-    base_system = load_file("prompts/base_system.md")
+    base_system = cached_file("prompts/base_system.md")
     agent_prompt = load_agent_prompt(agent_id)
     system = f"{base_system}\n\n---\n{agent_prompt}"
 

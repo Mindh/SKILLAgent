@@ -3,7 +3,7 @@ import os
 import json
 import importlib.util
 
-from runner.utils import load_file, log, parse_json, BASE_DIR
+from runner.utils import load_file, cached_file, log, parse_json, BASE_DIR
 from runner.llm import call_ai
 
 def load_tool_module(skill_id: str):
@@ -14,8 +14,8 @@ def load_tool_module(skill_id: str):
     return module
 
 def run_skill(skill_id: str, user_input: str, config: dict):
-    skill_prompt = load_file(f"skills/worker_prompts/{skill_id}_skill.md")
-    base_system = load_file("prompts/base_system.md")
+    skill_prompt = cached_file(f"skills/worker_prompts/{skill_id}_skill.md")
+    base_system = cached_file("prompts/base_system.md")
 
     system = f"{base_system}\n\n---\n{skill_prompt}"
     
@@ -60,8 +60,8 @@ def run_skill(skill_id: str, user_input: str, config: dict):
     return False, raw
 
 def run_judge(user_input: str, skill_output: str, skill_id: str, config: dict) -> dict:
-    judge_prompt = load_file("skills/system_prompts/judge_skill.md")
-    base_system = load_file("prompts/base_system.md")
+    judge_prompt = cached_file("skills/system_prompts/judge_skill.md")
+    base_system = cached_file("prompts/base_system.md")
 
     system = f"{base_system}\n\n---\n{judge_prompt}"
     user = (
@@ -81,8 +81,8 @@ def run_judge(user_input: str, skill_output: str, skill_id: str, config: dict) -
     return result
 
 def run_refine(user_input: str, previous_output: str, feedback: str, skill_id: str, attempt: int, config: dict) -> str:
-    refine_prompt = load_file("skills/system_prompts/refine_skill.md")
-    base_system = load_file("prompts/base_system.md")
+    refine_prompt = cached_file("skills/system_prompts/refine_skill.md")
+    base_system = cached_file("prompts/base_system.md")
 
     system = f"{base_system}\n\n---\n{refine_prompt}"
     user = (
