@@ -20,11 +20,19 @@ from runner.agent_retriever import (
     format_agents_block,
     get_agent_by_id,
     get_all_agent_ids,
+    _retriever as _AGENT_RETRIEVER,
 )
 from runner import agent_runner
 
 
 MAX_BUBBLE_UP_RECURSION = 1
+
+# pending_skill 단축회로 휴리스틱
+_PENDING_SKILL_INPUT_LIMIT = 30           # 이보다 짧은 입력만 단축회로 대상
+_PENDING_SKILL_CANCEL_WORDS = (
+    "그만", "취소", "됐어", "됐어요", "아니야", "아니요", "관둬",
+    "다른", "다른거", "다른 거", "다른일", "다른 일", "stop", "cancel",
+)
 
 
 # ──────────────────────────────────────────────────────────────
@@ -36,6 +44,7 @@ def _ensure_session(session: dict) -> dict:
     session.setdefault("global_state", {})
     session.setdefault("history", [])
     session.setdefault("pending_switch", None)    # {"target": agent_id} — 사용자 승인 대기
+    session.setdefault("pending_skill", None)     # {"skill_id", "missing_fields", "ask_user", "original_input"} — 슬롯 보충 대기
     return session
 
 
@@ -209,19 +218,40 @@ def _do_switch_agent(target_id: str, user_input: str, session: dict, config: dic
 
 
 def _do_call_skill(skill_id: str, user_input: str, session: dict, config: dict) -> str:
+    """
+    단발 skill 호출.
+    require_info → pending_skill 세팅 후 ask_user 메시지 반환.
+    not_found / 정상 / tool_failure → pending_skill 클리어 후 결과 반환.
+    """
     log(f"[Supervisor] 단발 skill 호출: {skill_id}")
     if skill_id == "chat" or not skill_id:
+        session["pending_skill"] = None
         return _do_chat(user_input, session, config)
 
     try:
         _, raw_out = run_skill(skill_id, user_input, config)
     except Exception as e:
         log(f"[Supervisor] skill 호출 실패: {e}")
+        session["pending_skill"] = None
         return _do_chat(user_input, session, config)
 
     parsed = parse_json(raw_out)
     session["global_state"][skill_id] = parsed if isinstance(parsed, dict) else raw_out
 
+    # ── require_info: 슬롯 보충 대기 ──
+    if isinstance(parsed, dict) and parsed.get("_status") == "require_info":
+        ask = parsed.get("ask_user") or "필요한 정보를 알려주세요."
+        session["pending_skill"] = {
+            "skill_id": skill_id,
+            "missing_fields": parsed.get("missing_fields", []),
+            "ask_user": ask,
+            "original_input": user_input,
+        }
+        log(f"[Supervisor] pending_skill 설정: {skill_id} (missing={parsed.get('missing_fields')})")
+        return ask
+
+    # 그 외(정상/not_found/tool_failure): pending_skill 클리어
+    session["pending_skill"] = None
     return _format_skill_response(skill_id, parsed, raw_out)
 
 
@@ -230,8 +260,19 @@ def _format_skill_response(skill_id: str, parsed, raw: str) -> str:
     if isinstance(parsed, dict):
         if "_parse_error" in parsed:
             return raw.strip()
+        # tool 자체가 끝까지 실패
+        if parsed.get("_status") == "tool_failure":
+            return "요청을 처리하지 못했습니다. 입력을 조금 더 구체적으로 알려주시겠어요?"
+        # require_info는 _do_call_skill에서 처리되지만 안전망으로 한 번 더
+        if parsed.get("_status") == "require_info":
+            return parsed.get("ask_user") or "필요한 정보를 알려주세요."
         if "function_result" in parsed:
             fr = parsed["function_result"]
+            # 함수형 tool의 not_found는 message만 노출
+            if isinstance(fr, dict) and fr.get("status") == "not_found":
+                return fr.get("message", "조회 결과를 찾을 수 없습니다.")
+            if isinstance(fr, dict) and "error" in fr and len(fr) <= 2:
+                return f"오류: {fr['error']}"
             if isinstance(fr, (dict, list)):
                 return f"결과:\n```json\n{json.dumps(fr, ensure_ascii=False, indent=2)}\n```"
             return f"결과: {fr}"
@@ -327,9 +368,66 @@ _HANDLERS = {
 
 
 # ──────────────────────────────────────────────────────────────
+# pending_skill 단축회로
+# ──────────────────────────────────────────────────────────────
+def _input_triggers_other_intent(user_input: str) -> bool:
+    """짧은 입력이 다른 agent의 trigger_keyword와 겹치는지 검사 (LLM 호출 없음)."""
+    text = (user_input or "").lower()
+    for agent in _AGENT_RETRIEVER.get_all():
+        for kw in agent.get("trigger_keywords", []):
+            if kw and kw.lower() in text:
+                return True
+    return False
+
+
+def _is_cancel_input(user_input: str) -> bool:
+    text = (user_input or "").strip().lower()
+    if not text:
+        return False
+    return any(w in text for w in _PENDING_SKILL_CANCEL_WORDS)
+
+
+def _try_pending_skill_short_circuit(user_input: str, session: dict, config: dict):
+    """
+    pending_skill이 있으면 LLM 결정 우회를 시도한다.
+    반환: 응답 문자열 또는 None(단축회로 미적용 → 일반 LLM 라우팅).
+    """
+    pending = session.get("pending_skill")
+    if not pending:
+        return None
+
+    # 1) 사용자가 명시적으로 취소 → 클리어 후 일반 chat으로 흘림 (None 반환)
+    if _is_cancel_input(user_input):
+        log("[Supervisor] pending_skill 취소 감지 → 클리어")
+        session["pending_skill"] = None
+        return None
+
+    # 2) 입력이 길거나 다른 의도 트리거가 명확하면 단축회로 안 함
+    if len(user_input.strip()) > _PENDING_SKILL_INPUT_LIMIT:
+        return None
+    if _input_triggers_other_intent(user_input):
+        log("[Supervisor] pending_skill 중 다른 agent 트리거 감지 → 일반 라우팅")
+        # 클리어는 _resolve_pending_skill에서 처리하지 않으므로 여기서
+        session["pending_skill"] = None
+        return None
+
+    # 3) 같은 skill을 원본 입력 + 신규 입력으로 재호출
+    skill_id = pending["skill_id"]
+    combined = f"{pending.get('original_input', '')} {user_input}".strip()
+    log(f"[Supervisor] pending_skill 단축회로: {skill_id} ← '{combined}'")
+    return _do_call_skill(skill_id, combined, session, config)
+
+
+# ──────────────────────────────────────────────────────────────
 # 턴 디스패치
 # ──────────────────────────────────────────────────────────────
 def _dispatch(user_input: str, session: dict, config: dict, depth: int = 0) -> str:
+    # pending_skill 단축회로 우선 시도
+    if depth == 0:
+        short = _try_pending_skill_short_circuit(user_input, session, config)
+        if short is not None:
+            return short
+
     decision = _decide(user_input, session, config)
     _resolve_pending_switch(decision, session)
     handler = _HANDLERS.get(decision["action"], _handle_chat)
