@@ -7,61 +7,46 @@ try:
 except Exception:
     pass
 
-from runner.utils import load_config, log
-from runner.skill_retriever import ensure_index_ready
-from runner.agent_retriever import ensure_agent_index_ready
-from runner.embeddings import embedding_available
-from runner import supervisor
+from runner import loop
+from runner.utils import log
 
 
-_RUNTIME_INITIALIZED = False
-
-
-def _init_runtime():
-    """스킬/에이전트 임베딩 인덱스 초기화 (프로세스당 1회).
-    임베딩이 불가능한 환경이면 retriever들이 자동으로 keyword 모드로 전환된다.
+def run(user_input: str, messages: list = None, injected_workflows: set = None) -> dict:
     """
-    global _RUNTIME_INITIALIZED
-    if _RUNTIME_INITIALIZED:
-        return
-    log(f"[Runtime] embedding_available = {embedding_available()}")
-    try:
-        ensure_index_ready()
-    except Exception as e:
-        log(f"[Warning] 스킬 인덱스 초기화 중 오류 (폴백 사용): {e}")
-    try:
-        ensure_agent_index_ready()
-    except Exception as e:
-        log(f"[Warning] 에이전트 인덱스 초기화 중 오류 (폴백 사용): {e}")
-    _RUNTIME_INITIALIZED = True
+    단일 턴 실행 API.
 
-
-def run(user_input: str, session: dict = None) -> dict:
+    messages와 injected_workflows를 넘기면 이어서 대화(상태 유지).
+    반환: {"success": bool, "message": str, "messages": list, "injected_workflows": set}
     """
-    supervisor 기반 단일 턴 실행.
-    session을 넘기면 이어서 대화(상태 유지), 없으면 매 호출마다 새 세션.
-
-    반환: {"success": bool, "message": str, "session": dict}
-    """
-    _init_runtime()
-    config = load_config()
-
     if not user_input or not user_input.strip():
-        return {"success": False, "message": "입력이 비어 있습니다.", "session": session or {}}
+        return {
+            "success": False,
+            "message": "입력이 비어 있습니다.",
+            "messages": messages or [],
+            "injected_workflows": injected_workflows or set(),
+        }
 
-    if session is None:
-        session = {}
+    if messages is None:
+        messages = []
+    if injected_workflows is None:
+        injected_workflows = set()
 
-    result = supervisor.turn(user_input, session, config)
-    return {"success": True, "message": result["message"], "session": result["session"]}
+    message = loop.turn(user_input, messages, injected_workflows)
+    return {
+        "success": True,
+        "message": message,
+        "messages": messages,
+        "injected_workflows": injected_workflows,
+    }
 
 
 def interactive_loop():
-    print("====== Skill Base AI Interactive (Supervisor) ======")
+    print("====== Skill Base AI (Claude 하네스 스타일) ======")
     print("종료: 'exit' 또는 'quit'")
-    print("====================================================")
+    print("=================================================")
 
-    session = {}
+    messages: list = []
+    injected_workflows: set = set()
 
     while True:
         try:
@@ -74,36 +59,20 @@ def interactive_loop():
             if not user_input:
                 continue
 
-            result = run(user_input, session=session)
-            session = result["session"]
+            result = run(user_input, messages=messages, injected_workflows=injected_workflows)
+            messages = result["messages"]
+            injected_workflows = result["injected_workflows"]
 
             print("\n" + "-" * 50)
             print("[AI]")
             print(result["message"])
-            _print_session_debug(session)
+            log(f"[Debug] 턴={sum(1 for m in messages if m['role'] == 'user' and '[워크플로우' not in m['content'])} | 주입된 워크플로우={injected_workflows}")
 
         except KeyboardInterrupt:
             print("\n시스템을 종료합니다.")
             break
         except Exception as e:
             print(f"\n[오류] {e}")
-
-
-def _print_session_debug(session: dict):
-    """현재 세션 상태를 간략히 표시."""
-    active = session.get("active_agent")
-    paused = session.get("paused_agents", [])
-    pending = session.get("pending_switch")
-    bits = []
-    if active:
-        bits.append(f"active={active['agent_id']}({active.get('status','?')})")
-    else:
-        bits.append("active=None")
-    if paused:
-        bits.append(f"paused=[{', '.join(p['agent_id'] for p in paused)}]")
-    if pending:
-        bits.append(f"pending_switch→{pending.get('target')}")
-    print("  ⎿ " + " | ".join(bits))
 
 
 if __name__ == "__main__":
