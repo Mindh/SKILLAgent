@@ -1,7 +1,12 @@
 # Skill Base AI - 의존성 패키지
 
-# LLM API 클라이언트 (OpenAI 호환 엔드포인트 - 로컬 서버 포함)
-openai
+# 자체 호스팅 모델 호출용 (runner/llm.py에서 사용)
+requests
 
-# 환경변수 파일(.env) 자동 로드
+# 환경변수 파일(.env) 자동 로드 (선택 사항)
 python-dotenv
+
+# (선택) Google AI Studio 등 OpenAI 호환 엔드포인트를 쓰는 경우에만 설치
+#   현재 worktree의 llm.py는 openai 클라이언트로 호출하지만,
+#   자체 모델 환경에서는 llm.py를 requests 기반으로 교체하면 openai는 불필요.
+# openai

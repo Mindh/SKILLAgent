@@ -5,29 +5,17 @@ Agentic 루프 — 프롬프트 기반 도구 호출 방식 (ReAct-style).
 function calling을 지원하지 않는 모델에서도 동작한다.
 모델이 응답 안에 <tool_call> 블록을 포함하면 루프가 이를 파싱해 도구를 실행하고,
 결과를 messages에 주입한 뒤 모델을 재호출한다.
+
+LLM 호출은 모두 runner.llm.call_ai_messages()를 통해서만 수행한다.
+모델·엔드포인트·SDK를 바꿀 때는 runner/llm.py만 수정하면 된다.
 """
 import json
-import os
 import re
-import time
 
-import openai
-
-# MODEL_NAME·API_KEY 설정은 llm.py에서 단일 관리.
-# 모델/엔드포인트를 바꿀 때는 llm.py의 값만 수정하면 된다.
-from runner.llm import MODEL_NAME, GEMINI_API_KEY
+from runner.llm import call_ai_messages
 from runner.tools import execute_tool, get_tool_descriptions
 from runner.utils import cached_file, log
 from runner.workflow_retriever import retrieve_workflows, load_workflow_definition
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-# llm.py와 동일한 OpenAI-compatible 엔드포인트
-_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 
 # 단일 턴에서 허용하는 최대 도구 호출 횟수 (무한 루프 방지)
 MAX_TOOL_CALLS = 5
@@ -41,15 +29,6 @@ def _get_system_prompt() -> str:
     if _system_prompt_cache is None:
         _system_prompt_cache = cached_file("prompts/system_prompt.md")
     return _system_prompt_cache
-
-
-def _get_client() -> openai.OpenAI:
-    key = os.environ.get("GEMINI_API_KEY", GEMINI_API_KEY)
-    if not key:
-        raise ValueError(
-            "API 키가 설정되지 않았습니다. runner/llm.py 또는 환경변수 GEMINI_API_KEY를 설정해주세요."
-        )
-    return openai.OpenAI(api_key=key, base_url=_BASE_URL)
 
 
 def turn(user_input: str, messages: list, injected_workflows: set) -> str:
@@ -90,12 +69,10 @@ def turn(user_input: str, messages: list, injected_workflows: set) -> str:
 
     messages.append({"role": "user", "content": user_input})
 
-    client = _get_client()
     system_prompt = _get_system_prompt()
 
     # ③ 프롬프트 기반 도구 호출 루프
     for iteration in range(MAX_TOOL_CALLS + 1):
-        start = time.time()
         # system 역할을 지원하지 않는 모델을 위해
         # 시스템 프롬프트를 첫 번째 user/assistant 교환으로 주입한다.
         full_messages = [
@@ -103,14 +80,8 @@ def turn(user_input: str, messages: list, injected_workflows: set) -> str:
             {"role": "assistant", "content": "네, 이해했습니다. 지시사항을 따르겠습니다."},
         ] + messages
 
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=full_messages,
-            temperature=0,
-        )
-        log(f"[Loop] API 응답: {time.time() - start:.2f}초 (iteration={iteration})")
-
-        text = response.choices[0].message.content or ""
+        text = call_ai_messages(full_messages, temperature=0)
+        log(f"[Loop] iteration={iteration}")
 
         # ④ <tool_call> 블록 감지
         tool_call = _extract_tool_call(text)
