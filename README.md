@@ -25,7 +25,8 @@ git clone https://github.com/Mindh/SKILLAgent.git
 cd SKILLAgent
 
 # 2. 패키지 설치
-pip install openai google-genai python-dotenv
+pip install -r requirements.txt
+# (Google AI Studio 등 OpenAI 호환 API를 쓰려면 추가로: pip install openai)
 
 # 3. API 키 설정 (둘 중 하나)
 export GEMINI_API_KEY="AIzaSy..."          # 환경변수
@@ -277,17 +278,49 @@ print(result["message"])   # 다음 단계 안내
 
 ## 모델 및 엔드포인트 설정
 
-`runner/llm.py`에서 모델명과 엔드포인트를 관리합니다. **이 파일만 수정**하면 모델/엔드포인트를 바꿀 수 있습니다.
+LLM 호출은 모두 `runner/llm.py`를 통해서만 수행됩니다. **이 파일만 수정**하면 모델·엔드포인트·SDK를 바꿀 수 있습니다 (`loop.py`는 직접 SDK를 import하지 않습니다).
+
+### llm.py가 노출해야 하는 함수
+
+| 함수 | 사용 위치 | 시그니처 |
+|------|----------|----------|
+| `call_ai_messages(messages, temperature=0)` | `loop.py`의 ReAct 루프 | `messages: list[dict]` → `str` |
+| `call_ai(system_prompt, user_prompt, temperature=0)` | LLM 도구(`translate`, `summarize` 등) | 두 문자열 → `str` |
+
+`call_ai`는 내부적으로 `call_ai_messages`를 호출하므로, **`call_ai_messages`만 교체**하면 LLM 도구도 자동으로 새 백엔드를 사용합니다.
+
+### 자체 호스팅 모델 연결 예시 (requests 사용)
 
 ```python
 # runner/llm.py
-MODEL_NAME = "gemma-3-27b-it"   # 사용할 모델명
+import os, time, requests
+from runner.utils import log
 
-# loop.py에서 참조하는 엔드포인트 (llm.py와 동일하게 유지)
-_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+MODEL_NAME = "my-self-hosted-model"
+
+def call_ai_messages(messages: list, temperature: float = 0) -> str:
+    start = time.time()
+    try:
+        r = requests.post(
+            "http://my-model-server/v1/chat/completions",
+            json={"model": MODEL_NAME, "messages": messages, "temperature": temperature},
+            timeout=60,
+        )
+        log(f"[LLM] API 응답: {time.time() - start:.2f}초")
+        return r.json()["choices"][0]["message"]["content"] or ""
+    except Exception as e:
+        log(f"[LLM] API 호출 실패 - {e}")
+        return ""
+
+def call_ai(system_prompt: str, user_prompt: str, temperature: float = 0) -> str:
+    text = call_ai_messages(
+        [{"role": "user", "content": f"[System]\n{system_prompt}\n\n[User]\n{user_prompt}"}],
+        temperature,
+    )
+    return text.strip() if text else "{}"
 ```
 
-자체 호스팅 모델(vLLM, Ollama 등)을 연결하려면 `base_url`을 해당 엔드포인트로 변경합니다. Function calling과 system role을 지원하지 않는 모델도 동작합니다.
+이렇게 하면 `openai` 패키지 없이도 동작합니다. Function calling과 system role을 지원하지 않는 모델(Gemma, Llama 등)도 그대로 사용 가능합니다.
 
 ---
 
@@ -386,11 +419,14 @@ python runner/run.py "이 문장을 영어로 번역해줘: 안녕하세요"
 ## 의존성
 
 ```bash
-pip install openai google-genai python-dotenv
+pip install -r requirements.txt
 ```
 
-| 패키지 | 용도 |
-|---|---|
-| `openai` | LLM API 호출 (OpenAI 호환 엔드포인트) |
-| `google-genai` | 임베딩 검색 사용 시 (`gemini-embedding-001`) — 선택 사항 |
-| `python-dotenv` | `.env` 파일에서 API 키 자동 로드 — 선택 사항 |
+| 패키지 | 필수 여부 | 용도 |
+|---|---|---|
+| `requests` | **필수** | 자체 호스팅 모델 호출 (llm.py에서 사용) |
+| `python-dotenv` | 선택 | `.env` 파일에서 API 키 자동 로드 |
+| `openai` | 선택 | Google AI Studio 등 OpenAI 호환 엔드포인트를 쓸 때만 |
+| `google-genai` | 선택 | 임베딩 검색 활성화 시 (`gemini-embedding-001`) |
+
+> **`loop.py`는 어떤 LLM SDK도 직접 import하지 않습니다.** 모든 LLM 호출은 `runner/llm.py`를 통해 이루어지므로, llm.py만 자체 모델용으로 교체하면 됩니다.
