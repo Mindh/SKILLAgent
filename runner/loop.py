@@ -6,13 +6,14 @@ function calling을 지원하지 않는 모델에서도 동작한다.
 모델이 응답 안에 <tool_call> 블록을 포함하면 루프가 이를 파싱해 도구를 실행하고,
 결과를 messages에 주입한 뒤 모델을 재호출한다.
 
-LLM 호출은 모두 runner.llm.call_ai_messages()를 통해서만 수행한다.
+LLM 호출은 모두 runner.llm.call_ai()를 통해서만 수행한다.
 모델·엔드포인트·SDK를 바꿀 때는 runner/llm.py만 수정하면 된다.
 """
 import json
 import re
+from typing import Optional
 
-from runner.llm import call_ai_messages
+from runner.llm import call_ai
 from runner.tools import execute_tool, get_tool_descriptions
 from runner.utils import cached_file, log
 from runner.workflow_retriever import retrieve_workflows, load_workflow_definition
@@ -20,7 +21,7 @@ from runner.workflow_retriever import retrieve_workflows, load_workflow_definiti
 # 단일 턴에서 허용하는 최대 도구 호출 횟수 (무한 루프 방지)
 MAX_TOOL_CALLS = 5
 
-_system_prompt_cache: str | None = None
+_system_prompt_cache: Optional[str] = None
 
 
 def _get_system_prompt() -> str:
@@ -73,14 +74,10 @@ def turn(user_input: str, messages: list, injected_workflows: set) -> str:
 
     # ③ 프롬프트 기반 도구 호출 루프
     for iteration in range(MAX_TOOL_CALLS + 1):
-        # system 역할을 지원하지 않는 모델을 위해
-        # 시스템 프롬프트를 첫 번째 user/assistant 교환으로 주입한다.
-        full_messages = [
-            {"role": "user",      "content": f"[System Instructions]\n{system_prompt}"},
-            {"role": "assistant", "content": "네, 이해했습니다. 지시사항을 따르겠습니다."},
-        ] + messages
-
-        text = call_ai_messages(full_messages, temperature=0)
+        # llm.py의 call_ai는 (system_prompt, user_prompt) 형태를 받으므로
+        # 전체 대화 히스토리를 단일 user_prompt 문자열로 직렬화해 전달한다.
+        user_prompt = _serialize_messages(messages)
+        text = call_ai(system_prompt, user_prompt, temperature=0)
         log(f"[Loop] iteration={iteration}")
 
         # ④ <tool_call> 블록 감지
@@ -126,7 +123,23 @@ def turn(user_input: str, messages: list, injected_workflows: set) -> str:
     return "처리 중 도구 호출 한도에 도달했습니다."
 
 
-def _extract_tool_call(text: str) -> dict | None:
+def _serialize_messages(messages: list) -> str:
+    """
+    대화 히스토리(messages 리스트)를 단일 문자열로 직렬화한다.
+    call_ai(system_prompt, user_prompt)의 user_prompt 인자로 전달하기 위함.
+
+    각 메시지는 [USER] / [ASSISTANT] 헤더와 함께 구분되어 모델이 turn 구조를
+    인식할 수 있도록 한다.
+    """
+    parts = []
+    for m in messages:
+        role = m.get("role", "user").upper()
+        content = m.get("content", "")
+        parts.append(f"[{role}]\n{content}")
+    return "\n\n".join(parts)
+
+
+def _extract_tool_call(text: str) -> Optional[dict]:
     """
     응답 텍스트에서 <tool_call> 블록을 추출한다.
     블록이 없거나 파싱 실패 시 None 반환.

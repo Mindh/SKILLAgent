@@ -278,16 +278,22 @@ print(result["message"])   # 다음 단계 안내
 
 ## 모델 및 엔드포인트 설정
 
-LLM 호출은 모두 `runner/llm.py`를 통해서만 수행됩니다. **이 파일만 수정**하면 모델·엔드포인트·SDK를 바꿀 수 있습니다 (`loop.py`는 직접 SDK를 import하지 않습니다).
+LLM 호출은 모두 `runner/llm.py`의 **`call_ai()` 함수 하나**를 통해서 수행됩니다. **이 함수만 교체**하면 모델·엔드포인트·SDK를 바꿀 수 있습니다 (`loop.py`와 모든 LLM 도구가 동일하게 사용).
 
-### llm.py가 노출해야 하는 함수
+### `call_ai` 함수 시그니처
 
-| 함수 | 사용 위치 | 시그니처 |
-|------|----------|----------|
-| `call_ai_messages(messages, temperature=0)` | `loop.py`의 ReAct 루프 | `messages: list[dict]` → `str` |
-| `call_ai(system_prompt, user_prompt, temperature=0)` | LLM 도구(`translate`, `summarize` 등) | 두 문자열 → `str` |
+```python
+def call_ai(system_prompt: str, user_prompt: str, temperature: float = 0) -> str:
+    """
+    system_prompt: 모델 지시사항(역할·도구 형식·워크플로우 원칙 등)
+    user_prompt:   사용자 입력 또는 직렬화된 대화 히스토리
+    반환:          모델 응답 텍스트 (실패 시 빈 문자열)
+    """
+```
 
-`call_ai`는 내부적으로 `call_ai_messages`를 호출하므로, **`call_ai_messages`만 교체**하면 LLM 도구도 자동으로 새 백엔드를 사용합니다.
+> `loop.py`는 다중 턴 messages 리스트를 `_serialize_messages()`로 단일 문자열로 묶어
+> `user_prompt`로 전달합니다. LLM 도구(`translate`, `summarize` 등)는 skill 프롬프트를
+> `system_prompt`로, 인자 JSON을 `user_prompt`로 전달합니다.
 
 ### 자체 호스팅 모델 연결 예시 (requests 사용)
 
@@ -298,12 +304,19 @@ from runner.utils import log
 
 MODEL_NAME = "my-self-hosted-model"
 
-def call_ai_messages(messages: list, temperature: float = 0) -> str:
+def call_ai(system_prompt: str, user_prompt: str, temperature: float = 0) -> str:
     start = time.time()
     try:
         r = requests.post(
             "http://my-model-server/v1/chat/completions",
-            json={"model": MODEL_NAME, "messages": messages, "temperature": temperature},
+            json={
+                "model": MODEL_NAME,
+                "messages": [
+                    {"role": "user",
+                     "content": f"[System Instructions]\n{system_prompt}\n\n[User Request]\n{user_prompt}"},
+                ],
+                "temperature": temperature,
+            },
             timeout=60,
         )
         log(f"[LLM] API 응답: {time.time() - start:.2f}초")
@@ -311,16 +324,11 @@ def call_ai_messages(messages: list, temperature: float = 0) -> str:
     except Exception as e:
         log(f"[LLM] API 호출 실패 - {e}")
         return ""
-
-def call_ai(system_prompt: str, user_prompt: str, temperature: float = 0) -> str:
-    text = call_ai_messages(
-        [{"role": "user", "content": f"[System]\n{system_prompt}\n\n[User]\n{user_prompt}"}],
-        temperature,
-    )
-    return text.strip() if text else "{}"
 ```
 
 이렇게 하면 `openai` 패키지 없이도 동작합니다. Function calling과 system role을 지원하지 않는 모델(Gemma, Llama 등)도 그대로 사용 가능합니다.
+
+> **Python 3.8 호환**: 코드는 `typing.Optional`, `typing.List`만 사용하므로 Python 3.8 이상에서 동작합니다.
 
 ---
 
