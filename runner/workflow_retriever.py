@@ -8,13 +8,14 @@ agent_registry.json의 trigger_keywords(키워드 매칭) 또는
 """
 import json
 import os
+from typing import List, Optional
 
 from runner.utils import load_file, log
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _REGISTRY_PATH = os.path.join(BASE_DIR, "agents", "agent_registry.json")
 
-_registry_cache: list | None = None
+_registry_cache: Optional[list] = None
 
 
 def _load_registry() -> list:
@@ -25,7 +26,7 @@ def _load_registry() -> list:
     return _registry_cache
 
 
-def retrieve_workflows(query: str, k: int = 2) -> list[str]:
+def retrieve_workflows(query: str, k: int = 2) -> List[str]:
     """
     query와 관련된 상위 k개 워크플로우의 agent_id 목록을 반환한다.
     매칭되는 워크플로우가 없으면 빈 리스트를 반환한다.
@@ -52,7 +53,7 @@ def load_workflow_definition(agent_id: str) -> str:
 
 # ── 검색 구현 ─────────────────────────────────────────────────────────────────
 
-def _keyword_search(query: str, registry: list, k: int) -> list[str]:
+def _keyword_search(query: str, registry: list, k: int) -> List[str]:
     query_lower = query.lower()
     scored = []
     for item in registry:
@@ -69,7 +70,7 @@ def _keyword_search(query: str, registry: list, k: int) -> list[str]:
     return result
 
 
-def _embedding_search(query: str, registry: list, k: int) -> list[str]:
+def _embedding_search(query: str, registry: list, k: int) -> List[str]:
     try:
         import os
         from google import genai
