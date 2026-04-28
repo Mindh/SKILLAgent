@@ -33,9 +33,43 @@ export GEMINI_API_KEY="AIzaSy..."          # 환경변수
 # 또는 runner/llm.py의 GEMINI_API_KEY 값 직접 수정
 
 # 4. 실행
-python runner/run.py                        # 대화형 모드
-python runner/run.py "1234 + 5678"          # 단일 실행 모드
+python runner/run.py                        # CLI 대화형 모드
+python runner/run.py "1234 + 5678"          # CLI 단일 실행 모드
+python runner/web.py                        # 웹 UI 서버 (http://localhost:5000)
 ```
+
+---
+
+## 웹 UI 모드
+
+```bash
+python runner/web.py                        # 0.0.0.0:5000 (외부 접속 허용)
+python runner/web.py --port 8080            # 포트 변경
+python runner/web.py --host 127.0.0.1       # 로컬 전용
+```
+
+브라우저에서 접속:
+- 로컬: `http://localhost:5000`
+- 외부 서버: `http://<서버IP>:5000` (방화벽에서 해당 포트 인바운드 허용 필요)
+
+### 웹 UI 특징
+
+- **일반 챗 인터페이스** — 사용자/AI 채팅 버블 형태
+- **AI 동작 실시간 표시** — "워크플로우 찾는 중...", "calculator 실행 중..." 등 진행 상태를 SSE(Server-Sent Events)로 푸시
+- **타자기 효과** — AI 답변이 한 글자씩 출력되어 스트리밍처럼 보임
+- **처리 과정 카드** — 도구 호출, 워크플로우 주입, 결과 등 모든 단계를 접을 수 있는 타임라인으로 표시
+- **세션 유지** — 대화 컨텍스트가 서버 메모리에 보존되어 멀티턴 대화 가능
+
+> **구현 노트**: `runner/loop.py`, `tools.py`, `llm.py`, `run.py` 등 기존 코드는 일절 수정하지 않습니다.
+> `runner/web.py`가 `messages` 리스트의 in-place 갱신을 백그라운드 스레드에서 polling해 진행 이벤트를 추출합니다.
+> 최종 답변 텍스트는 백엔드에서 한 번에 도착하지만, 프론트엔드 타자기 효과로 시각적으로 스트리밍처럼 처리됩니다.
+
+운영 환경 배포 권장:
+```bash
+pip install gunicorn
+gunicorn -b 0.0.0.0:5000 -w 1 --threads 4 runner.web:app
+```
+(SSE 특성상 worker 1 + threads 4 권장. 다중 worker는 세션 공유 문제로 권장하지 않음.)
 
 ---
 
@@ -181,14 +215,15 @@ Skill Base AI/
 
 ## 동적 워크플로우 주입 원리
 
+워크플로우 검색은 **2단계 분류**로 동작합니다 (임베딩 미사용):
+
 ```
 사용자: "휴직 신청하고 싶어요"
          │
          ▼
-workflow_retriever.retrieve_workflows("휴직 신청하고 싶어요", k=2)
-  → 키워드 매칭: "휴직" 포함 → ["leave_intake"]
-  → (임베딩 캐시가 있으면 시맨틱 검색으로 업그레이드)
-         │
+[1단계] 키워드 매칭 (workflow_retriever._keyword_search)
+  trigger_keywords substring 검사 → "휴직" 매칭 → ["leave_intake"]
+         │  매치 있음 → 즉시 반환 (LLM 호출 없음, 빠름)
          ▼
 messages에 주입:
   {"role": "user",      "content": "[워크플로우 컨텍스트 로드: leave_intake]\n...절차 전문..."}
@@ -198,38 +233,40 @@ messages에 주입:
 모델이 leave_intake 절차에 따라 단계별 안내 시작
 ```
 
-**워크플로우 전환**: 진행 중에 다른 워크플로우 키워드가 나오면 새 워크플로우를 주입하고, 이전 워크플로우 컨텍스트는 `messages`에 유지되므로 돌아와서 이어갈 수 있습니다.
-
----
-
-## 임베딩 검색 활성화 (선택)
-
-`agent_registry.json`의 각 항목에 `"embedding"` 필드가 채워져 있으면 키워드 매칭 대신 시맨틱 검색을 사용합니다.
-
-```bash
-# 임베딩 사전 계산 예시 (google-genai 필요)
-python -c "
-from google import genai
-import json, os
-
-client = genai.Client(api_key=os.environ['GEMINI_API_KEY'])
-with open('agents/agent_registry.json') as f:
-    registry = json.load(f)
-
-for item in registry:
-    if not item.get('embedding'):
-        resp = client.models.embed_content(
-            model='gemini-embedding-001',
-            contents=item['description']
-        )
-        item['embedding'] = resp.embeddings[0].values
-
-with open('agents/agent_registry.json', 'w', encoding='utf-8') as f:
-    json.dump(registry, f, ensure_ascii=False, indent=2)
-"
+```
+사용자: "직원이 좀 오래 쉬고 싶어해요" (간접 표현)
+         │
+         ▼
+[1단계] 키워드 매칭 → 매치 없음
+         │
+         ▼
+[2단계] LLM 분류기 (workflow_retriever._llm_classify)
+  모든 워크플로우 description을 call_ai에 전달:
+    "사용자 발화: 직원이 좀 오래 쉬고 싶어해요
+     아래 목록에서 가장 적합한 ID 또는 'none' 반환:
+     - leave_intake: 직원의 휴직 면담부터 발령까지...
+     - recruitment_intake: 채용 요청 접수...
+     ..."
+  → LLM 응답: "leave_intake"
+         │
+         ▼
+messages 주입 → 절차 안내
 ```
 
-임베딩이 없으면 자동으로 `trigger_keywords` 키워드 매칭으로 폴백합니다.
+```
+사용자: "안녕?" (일반 인사)
+         │
+         ▼
+[1단계] 키워드 매칭 → 매치 없음
+         │
+         ▼
+[2단계] LLM 분류기 → 'none' 반환 → 빈 리스트
+         │
+         ▼
+워크플로우 주입 없이 일반 대화 모드로 진행
+```
+
+**워크플로우 전환**: 진행 중에 다른 워크플로우 키워드/의도가 나오면 새 워크플로우가 주입되고, 이전 워크플로우 컨텍스트는 `messages`에 유지되므로 돌아와서 이어갈 수 있습니다.
 
 ---
 
@@ -433,8 +470,10 @@ pip install -r requirements.txt
 | 패키지 | 필수 여부 | 용도 |
 |---|---|---|
 | `requests` | **필수** | 자체 호스팅 모델 호출 (llm.py에서 사용) |
+| `flask` | 웹 UI 사용 시 필수 | `runner/web.py` 웹 서버 |
 | `python-dotenv` | 선택 | `.env` 파일에서 API 키 자동 로드 |
 | `openai` | 선택 | Google AI Studio 등 OpenAI 호환 엔드포인트를 쓸 때만 |
-| `google-genai` | 선택 | 임베딩 검색 활성화 시 (`gemini-embedding-001`) |
 
 > **`loop.py`는 어떤 LLM SDK도 직접 import하지 않습니다.** 모든 LLM 호출은 `runner/llm.py`를 통해 이루어지므로, llm.py만 자체 모델용으로 교체하면 됩니다.
+>
+> 워크플로우 분류는 키워드 매칭(1차) + LLM 분류기(2차)를 사용하므로 별도 임베딩 SDK(`google-genai` 등)가 필요 없습니다.

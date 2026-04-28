@@ -2,9 +2,12 @@
 """
 워크플로우 검색기.
 
-agent_registry.json의 trigger_keywords(키워드 매칭) 또는
-캐시된 embedding(시맨틱 검색)으로 관련 워크플로우를 찾는다.
-임베딩 API를 사용할 수 없으면 키워드 매칭으로 자동 폴백.
+2단계 분류:
+  1) 키워드 매칭 — agent_registry.json의 trigger_keywords substring 매칭 (빠르고 결정적)
+  2) 매칭 실패 시 LLM 분류기 — call_ai로 모든 워크플로우 description을 보여주고 적합한 ID 선택
+
+명백한 chat 발화("안녕?")는 LLM이 'none'을 반환하므로 자연스럽게 빈 리스트가 됨.
+임베딩 검색은 사용하지 않음 (false-positive 잦고 의존성 부담).
 """
 import json
 import os
@@ -26,24 +29,24 @@ def _load_registry() -> list:
     return _registry_cache
 
 
-def retrieve_workflows(query: str, k: int = 2) -> List[str]:
+def retrieve_workflows(query: str, k: int = 1) -> List[str]:
     """
-    query와 관련된 상위 k개 워크플로우의 agent_id 목록을 반환한다.
-    매칭되는 워크플로우가 없으면 빈 리스트를 반환한다.
+    query에 가장 적합한 워크플로우 ID를 최대 k개 반환한다.
+    매칭되는 워크플로우가 없으면 빈 리스트.
 
-    검색 우선순위:
-      1. 임베딩 시맨틱 검색 (registry에 embedding 캐시가 있을 때)
-      2. 키워드 매칭 (trigger_keywords 기반, 항상 사용 가능)
+    검색 순서:
+      1) 키워드 매칭 (trigger_keywords substring) — 매치 있으면 즉시 반환
+      2) LLM 분류 (description 기반) — 키워드 매치 없을 때만 호출
     """
     registry = _load_registry()
 
-    # 모든 항목에 임베딩이 캐시돼 있으면 시맨틱 검색 시도
-    if all(item.get("embedding") for item in registry):
-        results = _embedding_search(query, registry, k)
-        if results:
-            return results
+    # 1차: 키워드 매칭
+    keyword_results = _keyword_search(query, registry, k)
+    if keyword_results:
+        return keyword_results
 
-    return _keyword_search(query, registry, k)
+    # 2차: LLM 분류
+    return _llm_classify(query, registry, k)
 
 
 def load_workflow_definition(agent_id: str) -> str:
@@ -54,6 +57,7 @@ def load_workflow_definition(agent_id: str) -> str:
 # ── 검색 구현 ─────────────────────────────────────────────────────────────────
 
 def _keyword_search(query: str, registry: list, k: int) -> List[str]:
+    """trigger_keywords substring 매칭. 점수 높은 순으로 최대 k개 반환."""
     query_lower = query.lower()
     scored = []
     for item in registry:
@@ -70,39 +74,43 @@ def _keyword_search(query: str, registry: list, k: int) -> List[str]:
     return result
 
 
-def _embedding_search(query: str, registry: list, k: int) -> List[str]:
+def _llm_classify(query: str, registry: list, k: int) -> List[str]:
+    """
+    LLM에 모든 워크플로우 description을 보여주고 적합한 ID 1개를 선택하게 한다.
+    적합한 것이 없으면 'none'을 반환하도록 지시.
+
+    LLM 호출은 runner.llm.call_ai()를 통해 수행되므로 자체 모델 환경에서도 동작.
+    """
+    # 순환 import 방지: 함수 내에서 import
+    from runner.llm import call_ai
+
+    options = "\n".join(
+        f"- {item['agent_id']}: {item.get('description', '').strip()}"
+        for item in registry
+    )
+
+    system_prompt = (
+        "당신은 사용자 발화를 분석해 가장 적합한 HR 워크플로우를 선택하는 분류기입니다.\n"
+        "아래 목록 중 하나의 워크플로우 ID를 반환하거나, 어떤 것도 적합하지 않으면 'none'을 반환합니다.\n\n"
+        f"[사용 가능한 워크플로우]\n{options}\n\n"
+        "[응답 규칙]\n"
+        "- 정확히 워크플로우 ID 하나만 출력 (예: leave_intake)\n"
+        "- 인사·감사·일반 잡담 등 적합한 워크플로우가 없으면 정확히 'none' 출력\n"
+        "- 그 외 어떤 텍스트, 설명, 코드블록, JSON도 출력하지 마세요"
+    )
+
     try:
-        import os
-        from google import genai
-
-        client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY", ""))
-        response = client.models.embed_content(
-            model="gemini-embedding-001",
-            contents=query,
-        )
-        query_vec = response.embeddings[0].values
-
-        scored = []
-        for item in registry:
-            emb = item.get("embedding")
-            if emb:
-                score = _cosine(query_vec, emb)
-                scored.append((score, item["agent_id"]))
-        scored.sort(reverse=True)
-
-        # 유사도가 너무 낮으면 관련 없음으로 처리 (임계값 0.5)
-        result = [agent_id for score, agent_id in scored[:k] if score >= 0.5]
-        if result:
-            log(f"[WorkflowRetriever] 임베딩 검색: {result}")
-        return result
-
+        response = call_ai(system_prompt, f"사용자 발화: {query}").strip().lower()
     except Exception as e:
-        log(f"[WorkflowRetriever] 임베딩 검색 실패, 키워드로 폴백: {e}")
+        log(f"[WorkflowRetriever] LLM 분류기 호출 실패: {e}")
         return []
 
-
-def _cosine(a: list, b: list) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(x * x for x in b) ** 0.5
-    return dot / (na * nb) if na and nb else 0.0
+    valid_ids = {item["agent_id"].lower() for item in registry}
+    if response in valid_ids:
+        log(f"[WorkflowRetriever] LLM 분류: {response}")
+        # registry에서 원본 대소문자 ID 찾아 반환
+        for item in registry:
+            if item["agent_id"].lower() == response:
+                return [item["agent_id"]][:k]
+    log(f"[WorkflowRetriever] LLM 판단: 매칭 없음 ({response[:50]!r})")
+    return []
