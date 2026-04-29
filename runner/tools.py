@@ -229,11 +229,149 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+
+    # ── 교육 입과 안내용 도구 (2개) ────────────────────────────────────────────
+
+    {
+        "type": "function",
+        "function": {
+            "name": "poster_html_generator",
+            "description": "교육·행사 입과 안내용 HTML 포스터를 생성합니다. 결과는 완전한 HTML 문서이며 채팅에서 자동으로 미리보기됩니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "training_name": {"type": "string", "description": "교육명 (예: 신입사원 OJT 교육)"},
+                    "session_name":  {"type": "string", "description": "차수명 (예: 2025년 1차)"},
+                    "location":      {"type": "string", "description": "교육 장소 (예: 본사 3층 교육장)"},
+                    "datetime":      {"type": "string", "description": "교육 일시 (예: 2025-04-15 09:00~18:00)"},
+                    "instructor":    {"type": "string", "description": "강사명"},
+                    "modifications": {"type": "string", "description": "수정 요청 (선택, 없으면 빈 문자열)"},
+                },
+                "required": ["training_name", "session_name", "location", "datetime", "instructor"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "mail_url_generator",
+            "description": "메일 작성 화면을 미리 채워서 여는 mailto: URL을 생성합니다. 사용자가 클릭하면 기본 메일 클라이언트가 열립니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "subject": {"type": "string", "description": "메일 제목"},
+                    "body":    {"type": "string", "description": "메일 본문 (평문)"},
+                    "to":      {"type": "string", "description": "받는 사람 이메일 주소 (선택)"},
+                },
+                "required": ["subject", "body"],
+            },
+        },
+    },
+
+    # ── HR 운영 확장 도구 (5개) ──────────────────────────────────────────────
+
+    {
+        "type": "function",
+        "function": {
+            "name": "leave_balance_calculator",
+            "description": "직원의 입사일과 사용한 휴가 일수를 기준으로 잔여 연차 일수를 계산합니다. employee_name으로 DB 조회하거나 join_date를 직접 지정.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "employee_name": {"type": "string", "description": "직원 이름 (DB 조회용, 선택)"},
+                    "join_date":     {"type": "string", "description": "입사일 (YYYY-MM-DD, 직접 지정용)"},
+                    "used_days":     {"type": "integer", "description": "사용한 휴가 일수 (선택, 기본 0 또는 DB 값)"},
+                },
+                "required": [],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "expense_calculator",
+            "description": "출장비 견적을 도시·교통수단·일수·직급에 따라 계산합니다. 식비·숙박비·교통비를 분리해 합산.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "destination": {"type": "string", "description": "출장지 (예: 부산, 도쿄, 뉴욕)"},
+                    "days":        {"type": "integer", "description": "출장 일수"},
+                    "transport":   {"type": "string", "description": "교통수단 (ktx, 고속버스, 비행기_국내, 비행기_국제, 자가용)"},
+                    "origin":      {"type": "string", "description": "출발지 (선택, 기본 서울)"},
+                    "level":       {"type": "string", "description": "직급 (선택, 단가 보정에 사용)"},
+                },
+                "required": ["destination", "days"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "offboarding_checklist_generator",
+            "description": "퇴사자 정보를 받아 인수인계·계정회수·자료정리·정산·작별인사 5개 카테고리 퇴사 체크리스트를 생성합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "employee_name": {"type": "string", "description": "퇴사자 이름"},
+                    "department":    {"type": "string", "description": "소속 부서"},
+                    "position":      {"type": "string", "description": "직무 (선택)"},
+                    "last_day":      {"type": "string", "description": "마지막 출근일 (YYYY-MM-DD)"},
+                    "reason":        {"type": "string", "description": "퇴사 사유 (선택)"},
+                },
+                "required": ["employee_name", "department", "last_day"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "announcement_writer",
+            "description": "사내 공지문(이메일·슬랙·게시판)을 주제·톤·대상에 맞춰 작성합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic":    {"type": "string", "description": "공지 주제 (예: 여름휴가 안내)"},
+                    "audience": {"type": "string", "description": "대상자 (선택, 기본 전 직원)"},
+                    "tone":     {"type": "string", "description": "톤 (선택: 공식적|친근한|긴급)"},
+                    "key_info": {"type": "string", "description": "공지에 반드시 포함할 핵심 정보 (선택)"},
+                    "channel":  {"type": "string", "description": "배포 채널 (선택: 이메일|슬랙|사내 게시판)"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "performance_review_template_generator",
+            "description": "직급·부서·평가 종류(자기/동료/상급자/다면)에 맞춰 인사 평가 양식을 설계합니다. 섹션·가중치·문항 자동 구성.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_level":  {"type": "string", "description": "평가 대상 직급 (예: 사원, 대리, 과장, 팀장)"},
+                    "department":    {"type": "string", "description": "소속 부서 (선택)"},
+                    "review_type":   {"type": "string", "description": "평가 종류 (자기평가|동료평가|상급자평가|다면평가)"},
+                    "review_period": {"type": "string", "description": "평가 기간 (선택, 예: 2025년 상반기)"},
+                    "focus_areas":   {"type": "string", "description": "특별 강조 영역 (선택)"},
+                },
+                "required": ["target_level", "review_type"],
+            },
+        },
+    },
 ]
 
 # ── 도구 실행 ─────────────────────────────────────────────────────────────────
 
-_PYTHON_TOOLS = {"calculator", "employee_lookup", "candidate_lookup", "new_employee_lookup"}
+_PYTHON_TOOLS = {
+    "calculator", "employee_lookup", "candidate_lookup", "new_employee_lookup",
+    "mail_url_generator",
+    "leave_balance_calculator", "expense_calculator",
+}
 
 
 def execute_tool(name: str, args: dict):

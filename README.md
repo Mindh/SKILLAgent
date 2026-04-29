@@ -183,6 +183,9 @@ Skill Base AI/
 | `employee_lookup` | 직원 이름으로 인사 정보 조회 | `employee_name` |
 | `candidate_lookup` | 후보자 ID(C-001 형식)로 지원자 정보 조회 | `candidate_id` |
 | `new_employee_lookup` | 신규 입사자 ID(N-YYYY-001 형식)로 정보 조회 | `employee_id` |
+| `mail_url_generator` | 메일 작성 화면을 미리 채워서 여는 mailto: URL 생성 | `subject`, `body` |
+| `leave_balance_calculator` | 직원 잔여 연차 계산 (입사일·사용일 기준) | `employee_name` 또는 `join_date` |
+| `expense_calculator` | 출장비 견적 (도시·교통·일수·직급 단가 기반) | `destination`, `days` |
 
 ### LLM 생성형 도구 (9개)
 
@@ -197,6 +200,10 @@ Skill Base AI/
 | `jd_resume_match_score` | JD ↔ 이력서 매칭 점수(0~100) + 강점/약점 평가 |
 | `offer_letter_drafter` | 합격자 정보 → 오퍼레터(처우 제안서) 초안 작성 |
 | `onboarding_checklist_generator` | 입사자 정보 → 입사 1주차 체크리스트(5개 카테고리) |
+| `poster_html_generator` | 교육·행사 입과 안내 HTML 포스터 생성 (웹 UI에서 미리보기 자동 렌더링) |
+| `offboarding_checklist_generator` | 퇴사자 정보 → 인수인계·계정회수·자료정리·정산·작별 5개 카테고리 체크리스트 |
+| `announcement_writer` | 사내 공지문(이메일·슬랙·게시판)을 주제·톤·대상에 맞춰 작성 |
+| `performance_review_template_generator` | 직급·부서·평가종류에 맞춘 인사 평가 양식 (섹션·가중치·문항) 자동 설계 |
 
 ---
 
@@ -210,6 +217,12 @@ Skill Base AI/
 | `recruitment_intake` | 채용 요청 접수 | 채용, 공고, 포지션, 지원자 | `jd_generator`, `resume_parser`, `jd_resume_match_score`, `offer_letter_drafter`, `candidate_lookup` |
 | `onboarding_intake` | 온보딩 접수 | 온보딩, 입사, 신규 입사자 | `onboarding_checklist_generator`, `new_employee_lookup`, `candidate_lookup` |
 | `job_description_writing` | 직무기술서 작성 | 직무기술서, JD, 직무 설명 | — |
+| `training_admission_intake` | 교육 입과 안내 | 교육 입과, 포스터, 교육 안내, 세미나 | `poster_html_generator`, `mail_url_generator` |
+| `vacation_request` | 연차/휴가 신청 | 휴가 신청, 연차 신청, 반차, 잔여 휴가 | `leave_balance_calculator`, `mail_url_generator` |
+| `offboarding_intake` | 퇴사 접수 | 퇴사, 퇴직, 이직, 인수인계, 퇴직금 | `employee_lookup`, `offboarding_checklist_generator`, `leave_balance_calculator`, `mail_url_generator` |
+| `business_trip_request` | 출장 신청 | 출장, 출장비, 출장계획서, business trip | `expense_calculator`, `mail_url_generator` |
+| `performance_review` | 인사 평가 진행 | 인사 평가, 자기평가, 동료평가, 다면평가 | `performance_review_template_generator`, `announcement_writer` |
+| `health_checkup_intake` | 건강검진 안내 | 건강검진, 검진 안내, 종합검진 | `announcement_writer`, `mail_url_generator`, `employee_lookup` |
 
 ---
 

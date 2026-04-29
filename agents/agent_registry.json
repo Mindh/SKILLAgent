@@ -12560,5 +12560,131 @@
       0.0029433912
     ],
     "last_updated": null
+  },
+  {
+    "agent_id": "training_admission_intake",
+    "name": "교육 입과 안내",
+    "description": "교육 입과 안내 포스터 제작과 메일 발송 링크 생성. 사용자가 사내 교육·세미나 입과 안내문을 만들고자 할 때 사용. 교육명·차수·장소·일시·강사 정보를 받아 HTML 포스터를 만들고 메일 작성 URL을 제공.",
+    "trigger_keywords": [
+      "교육 입과",
+      "교육 안내",
+      "포스터",
+      "교육 공지",
+      "입과 안내",
+      "교육 포스터",
+      "안내 포스터",
+      "세미나 안내",
+      "교육 일정",
+      "교육 모집"
+    ],
+    "allowed_skills": [
+      "poster_html_generator",
+      "mail_url_generator"
+    ],
+    "embedding": null
+  },
+  {
+    "agent_id": "vacation_request",
+    "name": "연차/휴가 신청",
+    "description": "직원의 연차·반차·공가 등 휴가 신청을 단계별로 안내. 잔여 일수 확인 후 신청서 작성과 부서장 승인 메일까지 진행.",
+    "trigger_keywords": [
+      "휴가 신청",
+      "연차 신청",
+      "반차 신청",
+      "연차 쓰고",
+      "휴가 쓰고",
+      "연차 신청서",
+      "잔여 휴가"
+    ],
+    "allowed_skills": [
+      "leave_balance_calculator",
+      "employee_lookup",
+      "mail_url_generator"
+    ],
+    "embedding": null
+  },
+  {
+    "agent_id": "offboarding_intake",
+    "name": "퇴사 접수",
+    "description": "직원의 퇴사 절차를 인수인계·계정 회수·자료 정리·정산까지 단계별로 안내. 잔여 휴가 정산과 퇴사 메일 작성도 포함.",
+    "trigger_keywords": [
+      "퇴사",
+      "퇴직",
+      "이직",
+      "퇴사 절차",
+      "퇴사 처리",
+      "인수인계",
+      "퇴사 신청",
+      "퇴사 접수",
+      "퇴직금"
+    ],
+    "allowed_skills": [
+      "employee_lookup",
+      "offboarding_checklist_generator",
+      "leave_balance_calculator",
+      "mail_url_generator"
+    ],
+    "embedding": null
+  },
+  {
+    "agent_id": "business_trip_request",
+    "name": "출장 신청",
+    "description": "직원의 국내·해외 출장 신청을 단계별로 안내. 출장비 예산 산정·출장계획서 작성·승인 메일·사후 정산 안내.",
+    "trigger_keywords": [
+      "출장",
+      "출장 신청",
+      "출장비",
+      "출장 예산",
+      "비즈니스 트립",
+      "business trip",
+      "출장계획서"
+    ],
+    "allowed_skills": [
+      "expense_calculator",
+      "mail_url_generator",
+      "employee_lookup"
+    ],
+    "embedding": null
+  },
+  {
+    "agent_id": "performance_review",
+    "name": "인사 평가 진행",
+    "description": "직원 인사 평가 양식 설계와 진행 안내. 자기평가·동료평가·상급자평가·다면평가 양식을 직급/부서별로 생성하고 안내 공지까지 작성.",
+    "trigger_keywords": [
+      "인사 평가",
+      "평가 양식",
+      "인사평가",
+      "자기평가",
+      "동료평가",
+      "다면평가",
+      "평가 진행",
+      "평가 시즌"
+    ],
+    "allowed_skills": [
+      "performance_review_template_generator",
+      "announcement_writer",
+      "mail_url_generator"
+    ],
+    "embedding": null
+  },
+  {
+    "agent_id": "health_checkup_intake",
+    "name": "건강검진 안내",
+    "description": "정기 건강검진 안내 공지·메일 발송·결과 추적 절차를 단계별로 안내. 일반/종합/특수 검진 종류별 대상자 안내.",
+    "trigger_keywords": [
+      "건강검진",
+      "건강 검진",
+      "검진 안내",
+      "검진 일정",
+      "종합검진",
+      "정기 검진",
+      "검진 공지"
+    ],
+    "allowed_skills": [
+      "announcement_writer",
+      "mail_url_generator",
+      "employee_lookup"
+    ],
+    "embedding": null
   }
 ]

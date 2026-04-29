@@ -54,7 +54,9 @@ def turn(user_input: str, messages: list, injected_workflows: set) -> str:
         log("[Loop] 도구 목록 주입 완료")
 
     # ② 관련 워크플로우 검색 및 주입 (user 메시지 추가 전)
-    for wf_id in retrieve_workflows(user_input, k=2):
+    # 이미 진행 중인 워크플로우가 있으면 LLM 분류기 호출하지 않음 (성능 최적화)
+    skip_classify = bool(injected_workflows)
+    for wf_id in retrieve_workflows(user_input, k=2, skip_llm_classify=skip_classify):
         if wf_id not in injected_workflows:
             definition = load_workflow_definition(wf_id)
             messages.append({
@@ -115,12 +117,17 @@ def turn(user_input: str, messages: list, injected_workflows: set) -> str:
             "role": "user",
             "content": (
                 f"[도구 실행 결과: {name}]\n{result_str}\n\n"
-                "위 결과를 사용자에게 전달할 자연스러운 한국어 문장으로 풀어 답변하세요.\n\n"
-                "⚠️ 엄격한 출력 규칙:\n"
-                "- JSON, 코드 블록(```), 키-값 원본을 절대 그대로 출력하지 마세요.\n"
-                "- 도구 결과의 핵심 정보를 평문 문장으로 요약·설명하세요.\n"
+                "위 결과를 사용자에게 자연스러운 한국어로 전달하세요.\n\n"
+                "⚠️ 핵심 규칙:\n"
+                "- 결과의 핵심 정보를 반드시 메시지에 포함시켜야 합니다.\n"
+                "- 결과 없이 다음 단계로 넘어가거나 추가 질문만 하지 마세요.\n"
+                "- 워크플로우 진행 중이라면 '결과 알림 → 다음 단계 안내'를 한 메시지에 함께 담으세요.\n"
+                "- JSON, 코드 블록(```), 키-값 원본을 그대로 출력하지 마세요. (단, HTML 도구 결과는 그대로 전달)\n"
                 "- 숫자나 목록은 자연스럽게 풀어쓰세요 (예: \"홍길동 님의 잔여 휴가는 12일입니다\").\n"
-                "- 추가 도구가 필요하면 <tool_call> 형식으로 호출하세요."
+                "- 추가 도구가 필요하면 <tool_call> 형식으로 즉시 다음 호출을 하세요. "
+                "여러 도구를 연달아 호출해서 결과를 모두 받은 뒤 사용자에게 종합 답변해도 됩니다.\n"
+                "- 도구 결과가 HTML 문서인 경우(<!DOCTYPE html>로 시작) HTML 전체를 그대로 응답에 포함시키세요. "
+                "시스템이 자동으로 미리보기 렌더링합니다."
             ),
         })
 
