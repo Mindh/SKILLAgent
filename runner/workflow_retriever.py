@@ -29,7 +29,11 @@ def _load_registry() -> list:
     return _registry_cache
 
 
-def retrieve_workflows(query: str, k: int = 1) -> List[str]:
+def retrieve_workflows(
+    query: str,
+    k: int = 1,
+    skip_llm_classify: bool = False,
+) -> List[str]:
     """
     query에 가장 적합한 워크플로우 ID를 최대 k개 반환한다.
     매칭되는 워크플로우가 없으면 빈 리스트.
@@ -37,6 +41,11 @@ def retrieve_workflows(query: str, k: int = 1) -> List[str]:
     검색 순서:
       1) 키워드 매칭 (trigger_keywords substring) — 매치 있으면 즉시 반환
       2) LLM 분류 (description 기반) — 키워드 매치 없을 때만 호출
+         단, skip_llm_classify=True면 LLM 호출 없이 빈 리스트 반환 (성능 최적화)
+
+    skip_llm_classify는 이미 진행 중인 워크플로우가 있을 때 사용한다.
+    같은 워크플로우 안에서 사용자의 단답("네", "수정 없음" 등)에도 매번
+    LLM 분류기가 호출되는 것을 방지한다.
     """
     registry = _load_registry()
 
@@ -45,7 +54,10 @@ def retrieve_workflows(query: str, k: int = 1) -> List[str]:
     if keyword_results:
         return keyword_results
 
-    # 2차: LLM 분류
+    # 2차: LLM 분류 (옵션)
+    if skip_llm_classify:
+        log("[WorkflowRetriever] 진행 중 워크플로우 → LLM 분류 스킵")
+        return []
     return _llm_classify(query, registry, k)
 
 

@@ -17,7 +17,7 @@ except ImportError:
 GEMINI_API_KEY = ""   # ← 직접 입력하거나 .env / 환경변수로 설정
 
 # Google AI Studio 등에서 제공하는 모델명으로 필요 시 수정하세요
-MODEL_NAME = "gemma-3-27b-it"
+MODEL_NAME = "gemma-4-31b-it"
 
 
 def call_ai(system_prompt: str, user_prompt: str, temperature: float = 0) -> str:
