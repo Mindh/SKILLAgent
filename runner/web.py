@@ -352,6 +352,25 @@ def reset():
     return jsonify({"ok": True})
 
 
+@app.route("/tools")
+def list_tools():
+    """등록된 도구 목록 반환 (도구·스킬 확인 모달용)."""
+    from runner.tools import TOOL_DEFINITIONS, _PYTHON_TOOLS
+    items = []
+    for tool in TOOL_DEFINITIONS:
+        fn = tool["function"]
+        name = fn["name"]
+        items.append({
+            "id": name,
+            "name": TOOL_DISPLAY_KO.get(name, name),
+            "description": fn.get("description", ""),
+            "type": "python" if name in _PYTHON_TOOLS else "llm",
+            "parameters": fn.get("parameters", {}).get("properties", {}),
+            "required": fn.get("parameters", {}).get("required", []),
+        })
+    return jsonify(items)
+
+
 @app.route("/workflows")
 def list_workflows():
     """등록된 워크플로우 목록 반환 (모달 검색용)."""
@@ -556,12 +575,51 @@ INDEX_HTML = """<!DOCTYPE html>
     background: linear-gradient(90deg, #A78BFA, #60A5FA);
     -webkit-background-clip: text; -webkit-text-fill-color: transparent;
   }
+  .header-actions { display: flex; gap: 8px; }
   header button {
     background: var(--panel); border: 1px solid var(--border);
     color: var(--text); padding: 6px 14px; border-radius: 8px;
     font-size: .82rem; cursor: pointer; transition: background .15s;
   }
   header button:hover { background: #2A3A50; }
+
+  /* ── 도구·스킬 모달 (워크플로우 모달과 같은 컴포넌트 + 약간 확장) ── */
+  .modal-wide { max-width: 760px; }
+  .tools-section-title {
+    font-size: .8rem; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .05em;
+    padding: 14px 8px 6px;
+    position: sticky; top: 0;
+    background: var(--panel); z-index: 1;
+  }
+  .tool-option {
+    padding: 12px 14px; border-radius: 10px;
+    border: 1px solid var(--border); background: rgba(15,23,42,.4);
+  }
+  .tool-option .tool-name {
+    font-size: .95rem; font-weight: 600; color: var(--text);
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .tool-option .tool-id {
+    font-family: monospace; font-size: .75rem; color: var(--muted);
+  }
+  .tool-type-badge {
+    font-size: .7rem; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+  }
+  .tool-type-badge.python   { background: rgba(37,99,235,.2);  color: #93C5FD; }
+  .tool-type-badge.llm      { background: rgba(124,58,237,.2); color: #C4B5FD; }
+  .tool-type-badge.workflow { background: rgba(5,150,105,.2);  color: #6EE7B7; }
+  .tool-option .tool-desc {
+    font-size: .82rem; color: var(--muted); margin-top: 6px; line-height: 1.5;
+  }
+  .tool-option .tool-params {
+    margin-top: 8px; font-size: .76rem;
+    background: rgba(15,23,42,.5); border-radius: 6px; padding: 8px 10px;
+    font-family: monospace; color: #CBD5E1; line-height: 1.6;
+  }
+  .tool-option .tool-params .param-required {
+    color: #FCD34D; font-weight: 700;
+  }
 
   #chat {
     flex: 1; overflow-y: auto;
@@ -762,7 +820,10 @@ INDEX_HTML = """<!DOCTYPE html>
   <main class="main-area">
     <header>
       <h1>🤖 Skill Base AI</h1>
-      <button id="reset">현재 채팅 초기화</button>
+      <div class="header-actions">
+        <button id="tools-btn">🔧 도구·스킬 보기</button>
+        <button id="reset">현재 채팅 초기화</button>
+      </div>
     </header>
 
     <div id="chat"></div>
@@ -794,6 +855,24 @@ INDEX_HTML = """<!DOCTYPE html>
     <div class="modal-footer">
       <button id="wf-cancel-btn">취소</button>
       <button id="wf-start-btn" disabled>채팅 시작</button>
+    </div>
+  </div>
+</div>
+
+<!-- 도구·스킬 확인 모달 -->
+<div class="modal-overlay" id="tools-modal">
+  <div class="modal modal-wide" role="dialog" aria-labelledby="tools-modal-title">
+    <div class="modal-header">
+      <h2 id="tools-modal-title">🔧 사용 가능한 도구·스킬</h2>
+      <button class="modal-close" id="tools-close-btn" aria-label="닫기">×</button>
+    </div>
+    <div class="modal-search-wrap">
+      <input type="text" id="tools-search-input"
+             placeholder="이름·설명·키워드로 검색..."
+             autocomplete="off">
+    </div>
+    <div class="modal-list" id="tools-list">
+      <div class="wf-empty">로드 중...</div>
     </div>
   </div>
 </div>
@@ -1311,10 +1390,12 @@ $wfModal.addEventListener("click", (e) => {
   if (e.target === $wfModal) closeWorkflowModal();
 });
 
-// ESC로 닫기
+// ESC로 닫기 (열린 모달 모두)
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && $wfModal.classList.contains("active")) {
-    closeWorkflowModal();
+  if (e.key !== "Escape") return;
+  if ($wfModal.classList.contains("active")) closeWorkflowModal();
+  if ($toolsModal && $toolsModal.classList.contains("active")) {
+    $toolsModal.classList.remove("active");
   }
 });
 
@@ -1332,6 +1413,123 @@ $wfSearchInput.addEventListener("keydown", (e) => {
 
 // 페이지 로드 시 워크플로우 목록 미리 fetch (모달 첫 클릭 지연 방지)
 loadWorkflows();
+
+// ── 도구·스킬 확인 모달 ──────────────────────────────────────────────────
+const $toolsBtn = document.getElementById("tools-btn");
+const $toolsModal = document.getElementById("tools-modal");
+const $toolsSearch = document.getElementById("tools-search-input");
+const $toolsList = document.getElementById("tools-list");
+const $toolsClose = document.getElementById("tools-close-btn");
+
+let toolsCache = [];
+
+const TYPE_LABELS = {
+  python:   "정확한 동작",
+  llm:      "AI 판단",
+  workflow: "워크플로우",
+};
+
+async function loadTools() {
+  try {
+    const res = await fetch("/tools");
+    toolsCache = await res.json();
+  } catch (e) {
+    console.warn("도구 목록 로드 실패:", e);
+    toolsCache = [];
+  }
+}
+
+function renderToolCard(item) {
+  const card = document.createElement("div");
+  card.className = "tool-option";
+  const badgeText = TYPE_LABELS[item.type] || item.type;
+
+  let paramsHtml = "";
+  if (item.parameters && Object.keys(item.parameters).length) {
+    const lines = Object.entries(item.parameters).map(([k, v]) => {
+      const required = (item.required || []).includes(k);
+      const mark = required ? '<span class="param-required">*</span> ' : "";
+      const typeText = (v && v.type) ? v.type : "any";
+      const descText = (v && v.description) ? v.description : "";
+      return `${mark}${escapeHtml(k)} <span style="color:#94A3B8">(${escapeHtml(typeText)})</span>: ${escapeHtml(descText)}`;
+    });
+    paramsHtml = `<div class="tool-params">${lines.join("<br>")}</div>`;
+  }
+
+  card.innerHTML = `
+    <div class="tool-name">
+      ${escapeHtml(item.name)}
+      <span class="tool-id">${escapeHtml(item.id)}</span>
+      <span class="tool-type-badge ${item.type}">${escapeHtml(badgeText)}</span>
+    </div>
+    <div class="tool-desc">${escapeHtml(item.description || "")}</div>
+    ${paramsHtml}
+  `;
+  return card;
+}
+
+function renderToolsList(query) {
+  query = (query || "").trim().toLowerCase();
+  $toolsList.innerHTML = "";
+
+  // 워크플로우 섹션 (workflowsCache 재사용)
+  const wfFiltered = workflowsCache.filter(wf =>
+    !query
+    || wf.name.toLowerCase().includes(query)
+    || wf.id.toLowerCase().includes(query)
+    || (wf.description || "").toLowerCase().includes(query)
+    || (wf.keywords || []).some(k => k.toLowerCase().includes(query))
+  );
+  if (wfFiltered.length) {
+    const title = document.createElement("div");
+    title.className = "tools-section-title";
+    title.textContent = `📋 워크플로우 (${wfFiltered.length})`;
+    $toolsList.appendChild(title);
+    for (const wf of wfFiltered) {
+      $toolsList.appendChild(renderToolCard({
+        type: "workflow",
+        id: wf.id, name: wf.name, description: wf.description,
+        parameters: null, required: [],
+      }));
+    }
+  }
+
+  // 도구 섹션
+  const toolFiltered = toolsCache.filter(t =>
+    !query
+    || t.name.toLowerCase().includes(query)
+    || t.id.toLowerCase().includes(query)
+    || (t.description || "").toLowerCase().includes(query)
+  );
+  if (toolFiltered.length) {
+    const title = document.createElement("div");
+    title.className = "tools-section-title";
+    title.textContent = `🔧 도구 (${toolFiltered.length})`;
+    $toolsList.appendChild(title);
+    for (const t of toolFiltered) {
+      $toolsList.appendChild(renderToolCard(t));
+    }
+  }
+
+  if (!wfFiltered.length && !toolFiltered.length) {
+    $toolsList.innerHTML = `<div class="wf-empty">검색 결과가 없습니다.</div>`;
+  }
+}
+
+$toolsBtn.addEventListener("click", () => {
+  $toolsSearch.value = "";
+  renderToolsList("");
+  $toolsModal.classList.add("active");
+  setTimeout(() => $toolsSearch.focus(), 50);
+});
+$toolsClose.addEventListener("click", () => $toolsModal.classList.remove("active"));
+$toolsModal.addEventListener("click", e => {
+  if (e.target === $toolsModal) $toolsModal.classList.remove("active");
+});
+$toolsSearch.addEventListener("input", e => renderToolsList(e.target.value));
+
+// 페이지 로드 시 도구 목록 prefetch
+loadTools();
 
 $reset.addEventListener("click", async () => {
   if (!confirm("현재 채팅을 초기화하시겠습니까?")) return;
