@@ -363,6 +363,60 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+
+    # ── HR 일반 지식 도구 (3개) — 일반 채팅에서 전문성 강화에 활용 ────────────
+
+    {
+        "type": "function",
+        "function": {
+            "name": "labor_law_qa",
+            "description": "한국 노동법(근로기준법·남녀고용평등법·산업안전보건법·최저임금법 등) 관련 질문에 법령 조항 기반으로 답변합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "노동법 관련 질문"},
+                    "context":  {"type": "string", "description": "추가 맥락 (선택, 예: '5인 미만 사업장')"},
+                },
+                "required": ["question"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "hr_etiquette",
+            "description": "한국 직장 커뮤니케이션·매너에 대한 조언을 제공합니다 (메일·메신저·대면 상황별 권장 표현).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "situation": {"type": "string", "description": "상황 설명"},
+                    "relation":  {"type": "string", "description": "상대 관계 (선택: 상급자|동료|후배|외부 거래처)"},
+                    "channel":   {"type": "string", "description": "소통 채널 (선택: 대면|메신저|메일|전화)"},
+                },
+                "required": ["situation"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "salary_advice",
+            "description": "한국 IT·서비스 업계 보상(연봉·인센티브·퇴직금) 시장 수준과 협상 조언을 제공합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic":        {"type": "string", "description": "질문 주제"},
+                    "job_role":     {"type": "string", "description": "직무 (선택)"},
+                    "level":        {"type": "string", "description": "직급/연차 (선택)"},
+                    "company_size": {"type": "string", "description": "회사 규모 (선택: 스타트업|중견기업|대기업)"},
+                    "region":       {"type": "string", "description": "지역 (선택, 기본 수도권)"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
 ]
 
 # ── 도구 실행 ─────────────────────────────────────────────────────────────────
