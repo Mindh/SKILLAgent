@@ -55,6 +55,9 @@ TOOL_DISPLAY_KO = {
     "offboarding_checklist_generator": "퇴사 체크리스트 생성",
     "announcement_writer": "사내 공지문 작성",
     "performance_review_template_generator": "평가 양식 생성",
+    "labor_law_qa": "노동법 Q&A",
+    "hr_etiquette": "직장 매너 조언",
+    "salary_advice": "연봉/보상 조언",
 }
 
 WORKFLOW_DISPLAY_KO = {
@@ -270,6 +273,44 @@ def _extract_message_from_json(json_str: str):
     return None
 
 
+def _build_suggestions(user_input: str, ai_text: str, sess: dict) -> list:
+    """
+    사용자 입력 + AI 응답에서 키워드 매칭으로 관련 워크플로우를 추천.
+    이미 진행 중인 워크플로우는 제외. 최대 3개.
+
+    추가 LLM 호출 없이 키워드 substring 매칭만 사용 (즉시 응답).
+    """
+    from runner.workflow_retriever import _load_registry
+
+    text = (user_input + " " + ai_text).lower()
+    registry = _load_registry()
+
+    scored = []
+    for item in registry:
+        wf_id = item["agent_id"]
+        if wf_id in sess.get("injected_workflows", set()):
+            continue   # 이미 진행 중이면 추천 안 함
+        score = sum(
+            1 for kw in item.get("trigger_keywords", [])
+            if kw.lower() in text
+        )
+        if score > 0:
+            scored.append((
+                score,
+                {
+                    "id": wf_id,
+                    "name": WORKFLOW_DISPLAY_KO.get(wf_id, item.get("name", wf_id)),
+                    "description": (item.get("description", "") or "")[:80],
+                    "start_phrase": (
+                        f"{item.get('trigger_keywords', [None])[0] or wf_id} 진행 도와주세요"
+                    ),
+                },
+            ))
+
+    scored.sort(key=lambda x: -x[0])
+    return [s[1] for s in scored[:3]]
+
+
 def _stream_events(user_input: str, sess: dict):
     """제너레이터: 진행 이벤트를 SSE 형식으로 yield."""
 
@@ -295,6 +336,12 @@ def _stream_events(user_input: str, sess: dict):
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
 
+    def _enrich(ev: dict) -> dict:
+        # ai_response 이벤트에 후속 제안 첨부 (LLM 호출 없이 키워드 매칭만)
+        if ev and ev.get("phase") == "ai_response":
+            ev["suggestions"] = _build_suggestions(user_input, ev.get("text") or "", sess)
+        return ev
+
     last_seen = before_len
     while thread.is_alive():
         time.sleep(0.05)
@@ -303,7 +350,7 @@ def _stream_events(user_input: str, sess: dict):
             for i in range(last_seen, cur_len):
                 ev = _classify_message(sess["messages"][i])
                 if ev:
-                    yield fmt(ev)
+                    yield fmt(_enrich(ev))
             last_seen = cur_len
 
     thread.join()
@@ -312,7 +359,7 @@ def _stream_events(user_input: str, sess: dict):
     for i in range(last_seen, len(sess["messages"])):
         ev = _classify_message(sess["messages"][i])
         if ev:
-            yield fmt(ev)
+            yield fmt(_enrich(ev))
 
     if error_holder:
         yield fmt({"phase": "error", "text": f"오류: {error_holder['error']}"})
@@ -752,6 +799,34 @@ INDEX_HTML = """<!DOCTYPE html>
     background: white;
   }
 
+  /* 후속 제안 카드 */
+  .suggestions {
+    margin-top: 8px; display: flex; flex-direction: column; gap: 6px;
+    animation: slideIn .3s ease-out;
+  }
+  .suggestions-label {
+    font-size: .72rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .05em; font-weight: 600;
+    padding-left: 4px;
+  }
+  .suggestion-chip {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; border-radius: 10px;
+    background: rgba(124,58,237,.08); border: 1px solid rgba(124,58,237,.3);
+    color: #C4B5FD; font-size: .85rem;
+    cursor: pointer; transition: background .15s, transform .1s;
+  }
+  .suggestion-chip:hover {
+    background: rgba(124,58,237,.18); transform: translateY(-1px);
+  }
+  .suggestion-chip .s-icon { font-size: 1rem; }
+  .suggestion-chip .s-name { font-weight: 600; color: var(--text); }
+  .suggestion-chip .s-desc {
+    font-size: .75rem; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1; min-width: 0;
+  }
+
   /* 메일 링크 카드 */
   .mail-link-card {
     background: rgba(8,145,178,.1); border: 1px solid rgba(8,145,178,.4);
@@ -1094,7 +1169,30 @@ function fitIframeToContainer(previewCard, baseWidth, baseHeight) {
   wrap.style.height = (baseHeight * scale) + 'px';
 }
 
-function finalizeAI(aiRow, finalText, finalHtml) {
+function appendSuggestions(content, suggestions) {
+  if (!suggestions || !suggestions.length) return;
+  const wrap = document.createElement("div");
+  wrap.className = "suggestions";
+  wrap.innerHTML = `<div class="suggestions-label">💡 이어서 도와드릴까요?</div>`;
+  for (const s of suggestions) {
+    const chip = document.createElement("div");
+    chip.className = "suggestion-chip";
+    chip.innerHTML = `
+      <span class="s-icon">📋</span>
+      <span class="s-name">${escapeHtml(s.name)}</span>
+      <span class="s-desc">${escapeHtml(s.description || "")}</span>
+    `;
+    chip.addEventListener("click", () => {
+      $input.value = s.start_phrase || `${s.name} 시작해주세요`;
+      send();
+    });
+    wrap.appendChild(chip);
+  }
+  content.appendChild(wrap);
+  scrollChatToBottom();
+}
+
+function finalizeAI(aiRow, finalText, finalHtml, suggestions) {
   const content = aiRow.querySelector('.ai-content');
   const live = content.querySelector('[data-role="live"]');
   if (live) live.remove();
@@ -1173,6 +1271,9 @@ function finalizeAI(aiRow, finalText, finalHtml) {
     empty.textContent = "(빈 응답)";
     content.appendChild(empty);
   }
+
+  // 후속 제안 카드 (있을 때만)
+  appendSuggestions(content, suggestions);
 }
 
 function typewriter(el, text, onDone) {
@@ -1213,6 +1314,7 @@ async function send() {
 
   let finalText = "";
   let finalHtml = "";
+  let finalSuggestions = [];
 
   try {
     const response = await fetch("/chat", {
@@ -1243,6 +1345,7 @@ async function send() {
               if (ev.phase === "ai_response") {
                 finalText = ev.text || "";
                 finalHtml = ev.html || "";
+                finalSuggestions = ev.suggestions || [];
               } else if (ev.phase === "error") {
                 finalText = ev.text;
               } else {
@@ -1259,7 +1362,7 @@ async function send() {
     finalText = `네트워크 오류: ${e.message}`;
   }
 
-  finalizeAI(aiRow, finalText, finalHtml);
+  finalizeAI(aiRow, finalText, finalHtml, finalSuggestions);
   $send.disabled = false;
   $input.focus();
 }

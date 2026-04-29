@@ -204,6 +204,9 @@ Skill Base AI/
 | `offboarding_checklist_generator` | 퇴사자 정보 → 인수인계·계정회수·자료정리·정산·작별 5개 카테고리 체크리스트 |
 | `announcement_writer` | 사내 공지문(이메일·슬랙·게시판)을 주제·톤·대상에 맞춰 작성 |
 | `performance_review_template_generator` | 직급·부서·평가종류에 맞춘 인사 평가 양식 (섹션·가중치·문항) 자동 설계 |
+| `labor_law_qa` | 한국 노동법(근로기준법·남녀고용평등법 등) Q&A — 법령 조항 기반 답변 |
+| `hr_etiquette` | 한국 직장 커뮤니케이션·매너 조언 (메일·메신저·대면 권장 표현) |
+| `salary_advice` | 한국 IT/서비스 업계 보상 시장 수준·협상 조언 |
 
 ---
 
