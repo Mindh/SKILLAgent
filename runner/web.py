@@ -273,42 +273,68 @@ def _extract_message_from_json(json_str: str):
     return None
 
 
-def _build_suggestions(user_input: str, ai_text: str, sess: dict) -> list:
+def _build_reply_suggestions(user_input: str, ai_text: str) -> list:
     """
-    사용자 입력 + AI 응답에서 키워드 매칭으로 관련 워크플로우를 추천.
-    이미 진행 중인 워크플로우는 제외. 최대 3개.
+    AI 응답을 분석해 사용자가 다음에 할 만한 짧은 답변 3개를 LLM이 추측 생성.
 
-    추가 LLM 호출 없이 키워드 substring 매칭만 사용 (즉시 응답).
+    - LLM 호출 1회 추가 발생 (짧은 응답 → 빠른 처리 기대)
+    - 실패하면 빈 리스트 반환 (UI는 카드 미표시)
+    - 워크플로우 진행 중이면 다음 단계에 어울리는 답변 (예: "김철수"),
+      일반 대화면 후속 질문 (예: "자세히 알려줘")이 자연스러움
     """
-    from runner.workflow_retriever import _load_registry
+    from runner.llm import call_ai
 
-    text = (user_input + " " + ai_text).lower()
-    registry = _load_registry()
+    if not ai_text or not ai_text.strip():
+        return []
 
-    scored = []
-    for item in registry:
-        wf_id = item["agent_id"]
-        if wf_id in sess.get("injected_workflows", set()):
-            continue   # 이미 진행 중이면 추천 안 함
-        score = sum(
-            1 for kw in item.get("trigger_keywords", [])
-            if kw.lower() in text
-        )
-        if score > 0:
-            scored.append((
-                score,
-                {
-                    "id": wf_id,
-                    "name": WORKFLOW_DISPLAY_KO.get(wf_id, item.get("name", wf_id)),
-                    "description": (item.get("description", "") or "")[:80],
-                    "start_phrase": (
-                        f"{item.get('trigger_keywords', [None])[0] or wf_id} 진행 도와주세요"
-                    ),
-                },
-            ))
+    system_prompt = (
+        "당신은 사용자가 다음에 입력할 만한 짧은 답변을 추측하는 도우미입니다.\n"
+        "방금 AI가 사용자에게 한 말을 보고, 사용자가 할 만한 답변 3개를 추측해 짧게 제시하세요.\n\n"
+        "[응답 형식]\n"
+        "오로지 JSON 배열 1줄만 출력. 각 항목은 5~25자 짧은 문장 (한국어).\n"
+        "예: [\"다음 단계 알려줘\", \"홍길동 정보도 보여줘\", \"수정해줘\"]\n"
+        "설명·코드블록·추가 텍스트 절대 금지.\n\n"
+        "[추측 규칙]\n"
+        "- 사용자는 보통 **AI에게 무언가 요청·명령**하거나 **정보를 제공**하는 형태로 답변합니다.\n"
+        "- 좋은 예: \"다음 단계 알려줘\", \"홍길동도 확인해줘\", \"수정해줘\", \"다시 만들어줘\",\n"
+        "           \"김철수입니다\", \"이걸로 진행\", \"다른 옵션 보여줘\"\n"
+        "- 사회적 표현(\"감사합니다\", \"수고하세요\", \"잘 부탁드려요\")은 거의 사용하지 않으므로\n"
+        "  3개 중 1개 이하로만 포함하세요.\n"
+        "- AI가 정보를 물었으면 → 짧은 정답 또는 구체 예시 (이름·날짜·숫자 등)\n"
+        "- AI가 작업을 마쳤으면 → 다음 요청형 (\"○○도 부탁해\", \"다른 거 만들어줘\", \"결과 다운로드 어떻게 해\")\n"
+        "- AI가 선택을 요청하면 → 선택지 그대로 또는 \"다른 옵션 보여줘\", \"취소\"\n"
+        "- 모든 칩은 짧고 자연스러운 한국어 (5~25자), 구체적이면서 행동 가능한 표현."
+    )
 
-    scored.sort(key=lambda x: -x[0])
-    return [s[1] for s in scored[:3]]
+    user_prompt = (
+        f"[직전 사용자 메시지]\n{user_input}\n\n"
+        f"[방금 AI 응답]\n{ai_text[:600]}\n\n"
+        "→ 사용자가 다음에 보낼 만한 답변 3개를 JSON 배열로 출력하세요."
+    )
+
+    try:
+        response = call_ai(system_prompt, user_prompt).strip()
+    except Exception:
+        return []
+
+    # JSON 배열 추출 (모델이 코드블록·따옴표를 섞을 수 있으므로 방어적 파싱)
+    import re
+    # 코드블록 제거
+    response = re.sub(r"```(?:json)?\s*\n?", "", response)
+    response = re.sub(r"\n?```", "", response).strip()
+    # 첫 번째 [...] 블록 추출
+    match = re.search(r"\[.*?\]", response, re.DOTALL)
+    if not match:
+        return []
+    try:
+        data = json.loads(match.group(0))
+        if not isinstance(data, list):
+            return []
+        # 문자열만 필터링, 길이 제한, 최대 3개
+        items = [str(x).strip()[:30] for x in data if isinstance(x, str) and x.strip()][:3]
+        return items
+    except (json.JSONDecodeError, ValueError):
+        return []
 
 
 def _stream_events(user_input: str, sess: dict):
@@ -337,9 +363,9 @@ def _stream_events(user_input: str, sess: dict):
     thread.start()
 
     def _enrich(ev: dict) -> dict:
-        # ai_response 이벤트에 후속 제안 첨부 (LLM 호출 없이 키워드 매칭만)
+        # ai_response 이벤트에 사용자 다음 답변 추측 첨부 (LLM 호출 1회 추가)
         if ev and ev.get("phase") == "ai_response":
-            ev["suggestions"] = _build_suggestions(user_input, ev.get("text") or "", sess)
+            ev["suggestions"] = _build_reply_suggestions(user_input, ev.get("text") or "")
         return ev
 
     last_seen = before_len
@@ -799,7 +825,7 @@ INDEX_HTML = """<!DOCTYPE html>
     background: white;
   }
 
-  /* 후속 제안 카드 */
+  /* 후속 제안 — 사용자가 다음에 보낼 만한 짧은 답변 칩 */
   .suggestions {
     margin-top: 8px; display: flex; flex-direction: column; gap: 6px;
     animation: slideIn .3s ease-out;
@@ -809,22 +835,24 @@ INDEX_HTML = """<!DOCTYPE html>
     text-transform: uppercase; letter-spacing: .05em; font-weight: 600;
     padding-left: 4px;
   }
-  .suggestion-chip {
-    display: flex; align-items: center; gap: 8px;
-    padding: 8px 12px; border-radius: 10px;
-    background: rgba(124,58,237,.08); border: 1px solid rgba(124,58,237,.3);
-    color: #C4B5FD; font-size: .85rem;
-    cursor: pointer; transition: background .15s, transform .1s;
+  .suggestions-row {
+    display: flex; gap: 8px; flex-wrap: wrap;
   }
-  .suggestion-chip:hover {
-    background: rgba(124,58,237,.18); transform: translateY(-1px);
+  .reply-chip {
+    background: rgba(124,58,237,.12);
+    border: 1px solid rgba(124,58,237,.4);
+    color: #C4B5FD;
+    font-size: .85rem;
+    padding: 6px 14px;
+    border-radius: 18px;
+    cursor: pointer;
+    transition: background .15s, transform .1s;
+    font-family: inherit;
+    line-height: 1.3;
   }
-  .suggestion-chip .s-icon { font-size: 1rem; }
-  .suggestion-chip .s-name { font-weight: 600; color: var(--text); }
-  .suggestion-chip .s-desc {
-    font-size: .75rem; color: var(--muted);
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    flex: 1; min-width: 0;
+  .reply-chip:hover {
+    background: rgba(124,58,237,.25); transform: translateY(-1px);
+    color: var(--text);
   }
 
   /* 메일 링크 카드 */
@@ -1171,23 +1199,29 @@ function fitIframeToContainer(previewCard, baseWidth, baseHeight) {
 
 function appendSuggestions(content, suggestions) {
   if (!suggestions || !suggestions.length) return;
+
   const wrap = document.createElement("div");
   wrap.className = "suggestions";
-  wrap.innerHTML = `<div class="suggestions-label">💡 이어서 도와드릴까요?</div>`;
-  for (const s of suggestions) {
-    const chip = document.createElement("div");
-    chip.className = "suggestion-chip";
-    chip.innerHTML = `
-      <span class="s-icon">📋</span>
-      <span class="s-name">${escapeHtml(s.name)}</span>
-      <span class="s-desc">${escapeHtml(s.description || "")}</span>
-    `;
+  wrap.innerHTML = `<div class="suggestions-label">💡 이렇게 답해보세요</div>`;
+
+  const row = document.createElement("div");
+  row.className = "suggestions-row";
+
+  for (const text of suggestions) {
+    if (typeof text !== "string" || !text.trim()) continue;
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "reply-chip";
+    chip.textContent = text;
     chip.addEventListener("click", () => {
-      $input.value = s.start_phrase || `${s.name} 시작해주세요`;
+      $input.value = text;
       send();
     });
-    wrap.appendChild(chip);
+    row.appendChild(chip);
   }
+
+  if (!row.children.length) return;   // 유효한 칩이 없으면 미표시
+  wrap.appendChild(row);
   content.appendChild(wrap);
   scrollChatToBottom();
 }
