@@ -417,6 +417,189 @@ TOOL_DEFINITIONS = [
             },
         },
     },
+
+    # ── 보고서·PPT 작성 도구 (10개) ────────────────────────────────────────────
+
+    {
+        "type": "function",
+        "function": {
+            "name": "report_brief_analyzer",
+            "description": "사용자의 짧거나 모호한 보고서 요청을 받아 주제·목적·청중·핵심 질문을 정리하고 부족한 정보를 식별합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "rough_input": {"type": "string", "description": "사용자의 자유 요청 텍스트"},
+                    "known_info":  {"type": "string", "description": "이미 알려진 정보 (선택, JSON 객체 문자열)"},
+                },
+                "required": ["rough_input"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "background_research",
+            "description": "보고서 주제에 대한 배경·시장 맥락·트렌드·핵심 사실을 LLM 학습 지식 범위에서 정리합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string", "description": "보고서 주제"},
+                    "scope": {"type": "string", "description": "조사 범위 (선택)"},
+                    "depth": {"type": "string", "description": "조사 깊이 (선택: summary|detailed)"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "audience_analyzer",
+            "description": "대상 청중(임원/신입/투자자/외부 등)에 맞는 톤·강조점·피해야 할 표현·예상 질문을 분석합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "audience": {"type": "string", "description": "대상 청중"},
+                    "topic":    {"type": "string", "description": "보고서 주제 (선택)"},
+                    "context":  {"type": "string", "description": "추가 맥락 (선택)"},
+                },
+                "required": ["audience"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "key_message_extractor",
+            "description": "사용자가 제공한 자료/메모에서 보고서의 핵심 메시지 3~5개를 우선순위와 함께 추출합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "raw_content": {"type": "string", "description": "사용자 자료/메모 (자유 텍스트)"},
+                    "topic":       {"type": "string", "description": "보고서 주제 (선택)"},
+                    "audience":    {"type": "string", "description": "청중 (선택)"},
+                },
+                "required": ["raw_content"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "storytelling_arc",
+            "description": "보고서 흐름을 스토리텔링 구조(SCQA·피라미드·시간순·문제해결)로 설계합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic":         {"type": "string", "description": "보고서 주제"},
+                    "audience":      {"type": "string", "description": "대상 청중 (선택)"},
+                    "core_messages": {"type": "string", "description": "핵심 메시지 리스트 (선택)"},
+                    "structure_preference": {"type": "string", "description": "선호 구조 (선택: scqa|pyramid|chronological|problem_solution|auto)"},
+                },
+                "required": ["topic"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "report_outline_generator",
+            "description": "보고서 주제·청중·스토리 구조를 받아 슬라이드별 상세 개요(섹션 제목·핵심 메시지·권장 레이아웃·시각화)를 생성합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic":         {"type": "string", "description": "보고서 주제"},
+                    "audience":      {"type": "string", "description": "대상 청중"},
+                    "slide_count":   {"type": "integer", "description": "원하는 슬라이드 개수 (보통 8~20)"},
+                    "core_messages": {"type": "string", "description": "핵심 메시지 리스트 (선택)"},
+                    "story_arc":     {"type": "string", "description": "스토리 흐름 단계 (선택)"},
+                    "background":    {"type": "string", "description": "배경 자료 요약 (선택)"},
+                    "additional_context": {"type": "string", "description": "사용자 추가 메모 (선택)"},
+                },
+                "required": ["topic", "audience", "slide_count"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "slide_content_enricher",
+            "description": "한 슬라이드에 대해 짧은 메모·개요만 받아도 풍성한 본문·불릿·강조 문구·아이콘 추천을 작성합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slide_title":  {"type": "string", "description": "슬라이드 제목"},
+                    "key_message":  {"type": "string", "description": "해당 슬라이드 핵심 메시지"},
+                    "layout":       {"type": "string", "description": "레이아웃 (title|bullet|stats_grid 등)"},
+                    "brief_note":   {"type": "string", "description": "사용자 메모 (선택)"},
+                    "audience":     {"type": "string", "description": "청중 (선택)"},
+                    "tone":         {"type": "string", "description": "어조 (선택)"},
+                },
+                "required": ["slide_title", "key_message", "layout"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "data_visualization_recommender",
+            "description": "데이터 유형·요약·강조 인사이트를 받아 가장 효과적인 차트·인포그래픽 종류를 추천합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "data_type":    {"type": "string", "description": "데이터 유형 (시계열|카테고리 비교|구성비|관계|지리적 등)"},
+                    "data_summary": {"type": "string", "description": "데이터 한 줄 요약"},
+                    "key_insight":  {"type": "string", "description": "강조하고 싶은 인사이트 (선택)"},
+                    "audience":     {"type": "string", "description": "청중 (선택)"},
+                },
+                "required": ["data_type", "data_summary"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "html_slide_deck_generator",
+            "description": "보고서 개요·콘텐츠를 받아 완성된 HTML 슬라이드 덱(방향키 네비게이션, 13가지 레이아웃, 인라인 SVG 인포그래픽)을 생성합니다. 결과는 채팅에서 자동 미리보기됩니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "report_title": {"type": "string", "description": "보고서 제목"},
+                    "subtitle":     {"type": "string", "description": "부제 (선택)"},
+                    "theme_color":  {"type": "string", "description": "메인 색상 hex (예: #2563EB)"},
+                    "author":       {"type": "string", "description": "작성자/팀 (선택)"},
+                    "slides":       {"type": "string", "description": "슬라이드 정보 배열 (JSON 문자열)"},
+                    "modifications": {"type": "string", "description": "수정 요청 (선택)"},
+                },
+                "required": ["report_title", "theme_color", "slides"],
+            },
+        },
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "speaker_notes_generator",
+            "description": "각 슬라이드 내용을 받아 발표자용 1~2분 분량 구어체 발표 스크립트를 작성합니다.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slides":   {"type": "string", "description": "슬라이드 정보 배열 (JSON 문자열)"},
+                    "audience": {"type": "string", "description": "청중 (선택)"},
+                    "duration_per_slide_sec": {"type": "integer", "description": "슬라이드당 발표 시간 초 (선택, 기본 90)"},
+                },
+                "required": ["slides"],
+            },
+        },
+    },
 ]
 
 # ── 도구 실행 ─────────────────────────────────────────────────────────────────

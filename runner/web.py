@@ -58,6 +58,17 @@ TOOL_DISPLAY_KO = {
     "labor_law_qa": "노동법 Q&A",
     "hr_etiquette": "직장 매너 조언",
     "salary_advice": "연봉/보상 조언",
+    # 보고서·PPT 작성 도구
+    "report_brief_analyzer": "보고서 의도 분석",
+    "background_research": "배경·맥락 조사",
+    "audience_analyzer": "청중 분석",
+    "key_message_extractor": "핵심 메시지 추출",
+    "storytelling_arc": "스토리 흐름 설계",
+    "report_outline_generator": "보고서 개요 생성",
+    "slide_content_enricher": "슬라이드 본문 보강",
+    "data_visualization_recommender": "데이터 시각화 추천",
+    "html_slide_deck_generator": "HTML 슬라이드덱 생성",
+    "speaker_notes_generator": "발표 스크립트 작성",
 }
 
 WORKFLOW_DISPLAY_KO = {
@@ -71,6 +82,7 @@ WORKFLOW_DISPLAY_KO = {
     "business_trip_request": "출장 신청",
     "performance_review": "인사 평가 진행",
     "health_checkup_intake": "건강검진 안내",
+    "report_writing": "보고서·PPT 작성",
 }
 
 
@@ -1006,6 +1018,7 @@ const WELCOME_HTML = `
       <span class="example-chip" data-text="부산으로 2일 출장 신청">출장 신청 (부산 2일)</span>
       <span class="example-chip" data-text="신입사원 OJT 교육 안내 포스터 만들어줘">교육 포스터 만들어줘</span>
       <span class="example-chip" data-text="대리 자기평가 양식 만들어줘">평가 양식 (대리 자기평가)</span>
+      <span class="example-chip" data-text="1분기 사업 성과 보고서 PPT 만들어줘">보고서·PPT 작성</span>
       <span class="example-chip" data-text="안녕을 영어로 번역해줘">번역</span>
     </div>
   </div>
