@@ -207,6 +207,16 @@ Skill Base AI/
 | `labor_law_qa` | 한국 노동법(근로기준법·남녀고용평등법 등) Q&A — 법령 조항 기반 답변 |
 | `hr_etiquette` | 한국 직장 커뮤니케이션·매너 조언 (메일·메신저·대면 권장 표현) |
 | `salary_advice` | 한국 IT/서비스 업계 보상 시장 수준·협상 조언 |
+| `report_brief_analyzer` | 보고서 의도 분석 — 짧은 요청을 받아 주제·청중·핵심 질문 정리 |
+| `background_research` | 보고서 주제의 배경·시장 맥락·트렌드·핵심 사실 자동 조사 |
+| `audience_analyzer` | 대상 청중에 맞는 톤·강조점·예상 질문 분석 |
+| `key_message_extractor` | 자료에서 핵심 메시지 3~5개 우선순위와 함께 추출 |
+| `storytelling_arc` | 보고서 스토리 흐름(SCQA·피라미드 등) 설계 |
+| `report_outline_generator` | 슬라이드별 상세 개요(제목·핵심 메시지·레이아웃) 생성 |
+| `slide_content_enricher` | 한 슬라이드의 짧은 메모를 풍성한 본문·불릿·아이콘 추천으로 보강 |
+| `data_visualization_recommender` | 데이터 유형에 맞는 차트·인포그래픽 종류 추천 |
+| `html_slide_deck_generator` | 완성된 HTML PPT 슬라이드 덱 출력 (방향키 네비게이션, 13가지 레이아웃) |
+| `speaker_notes_generator` | 슬라이드별 1~2분 발표 스크립트 작성 |
 
 ---
 
@@ -221,6 +231,7 @@ Skill Base AI/
 | `onboarding_intake` | 온보딩 접수 | 온보딩, 입사, 신규 입사자 | `onboarding_checklist_generator`, `new_employee_lookup`, `candidate_lookup` |
 | `job_description_writing` | 직무기술서 작성 | 직무기술서, JD, 직무 설명 | — |
 | `training_admission_intake` | 교육 입과 안내 | 교육 입과, 포스터, 교육 안내, 세미나 | `poster_html_generator`, `mail_url_generator` |
+| `report_writing` | 보고서·PPT 작성 | 보고서, PPT, 슬라이드, 발표 자료, 기획안, 제안서 | `report_brief_analyzer`, `background_research`, `audience_analyzer`, `key_message_extractor`, `storytelling_arc`, `report_outline_generator`, `slide_content_enricher`, `data_visualization_recommender`, `html_slide_deck_generator`, `speaker_notes_generator` |
 | `vacation_request` | 연차/휴가 신청 | 휴가 신청, 연차 신청, 반차, 잔여 휴가 | `leave_balance_calculator`, `mail_url_generator` |
 | `offboarding_intake` | 퇴사 접수 | 퇴사, 퇴직, 이직, 인수인계, 퇴직금 | `employee_lookup`, `offboarding_checklist_generator`, `leave_balance_calculator`, `mail_url_generator` |
 | `business_trip_request` | 출장 신청 | 출장, 출장비, 출장계획서, business trip | `expense_calculator`, `mail_url_generator` |

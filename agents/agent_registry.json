@@ -12686,5 +12686,42 @@
       "employee_lookup"
     ],
     "embedding": null
+  },
+  {
+    "agent_id": "report_writing",
+    "name": "보고서·PPT 작성",
+    "description": "사용자가 짧게 요청해도 AI가 의도 분석·배경 조사·청중 분석·핵심 메시지 정립·스토리 설계·개요 생성·콘텐츠 보강을 자동으로 수행하여 최종적으로 HTML 슬라이드 덱(방향키 네비게이션, 인포그래픽 포함)을 생성합니다. 사업 보고·기획안·발표 자료 등 PPT 형태 보고서 작성에 사용.",
+    "trigger_keywords": [
+      "보고서",
+      "보고서 작성",
+      "보고서 만들어",
+      "PPT",
+      "PPT 만들",
+      "슬라이드",
+      "슬라이드 덱",
+      "슬라이드덱",
+      "발표 자료",
+      "발표자료",
+      "프레젠테이션",
+      "기획안",
+      "제안서",
+      "보고 자료",
+      "보고자료",
+      "사업 보고",
+      "성과 보고"
+    ],
+    "allowed_skills": [
+      "report_brief_analyzer",
+      "background_research",
+      "audience_analyzer",
+      "key_message_extractor",
+      "storytelling_arc",
+      "report_outline_generator",
+      "slide_content_enricher",
+      "data_visualization_recommender",
+      "html_slide_deck_generator",
+      "speaker_notes_generator"
+    ],
+    "embedding": null
   }
 ]
