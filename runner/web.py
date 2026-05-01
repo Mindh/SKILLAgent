@@ -34,42 +34,12 @@ app = Flask(__name__)
 SESSIONS: dict = {}
 
 # 도구·워크플로우 한글 표시명 매핑 (UI 친화적 라벨)
-TOOL_DISPLAY_KO = {
-    "calculator": "계산기",
-    "employee_lookup": "직원 정보 조회",
-    "candidate_lookup": "후보자 정보 조회",
-    "new_employee_lookup": "신규 입사자 정보 조회",
-    "translate": "번역",
-    "summarize": "요약",
-    "extract": "키워드 추출",
-    "vacation_parser": "휴가 정보 추출",
-    "jd_generator": "채용공고 생성",
-    "resume_parser": "이력서 분석",
-    "jd_resume_match_score": "이력서 적합도 평가",
-    "offer_letter_drafter": "오퍼레터 작성",
-    "onboarding_checklist_generator": "온보딩 체크리스트 생성",
-    "poster_html_generator": "교육 포스터 생성",
-    "mail_url_generator": "메일 작성 링크 생성",
-    "leave_balance_calculator": "잔여 휴가 계산",
-    "expense_calculator": "출장비 견적",
-    "offboarding_checklist_generator": "퇴사 체크리스트 생성",
-    "announcement_writer": "사내 공지문 작성",
-    "performance_review_template_generator": "평가 양식 생성",
-    "labor_law_qa": "노동법 Q&A",
-    "hr_etiquette": "직장 매너 조언",
-    "salary_advice": "연봉/보상 조언",
-    # 보고서·PPT 작성 도구
-    "report_brief_analyzer": "보고서 의도 분석",
-    "background_research": "배경·맥락 조사",
-    "audience_analyzer": "청중 분석",
-    "key_message_extractor": "핵심 메시지 추출",
-    "storytelling_arc": "스토리 흐름 설계",
-    "report_outline_generator": "보고서 개요 생성",
-    "slide_content_enricher": "슬라이드 본문 보강",
-    "data_visualization_recommender": "데이터 시각화 추천",
-    "html_slide_deck_generator": "HTML 슬라이드덱 생성",
-    "speaker_notes_generator": "발표 스크립트 작성",
-}
+# 도구 한글 표시명은 skill_loader가 SKILL.md 프론트매터에서 자동 수집한다.
+# 메타 도구·미등록 도구만 fallback으로 여기서 보강.
+from runner import skill_loader as _skill_loader  # noqa: E402
+
+TOOL_DISPLAY_KO = dict(_skill_loader.display_name_map())
+TOOL_DISPLAY_KO.setdefault("list_skills", "도구 카테고리 펼치기")
 
 WORKFLOW_DISPLAY_KO = {
     "leave_intake": "휴직 접수",
@@ -88,7 +58,14 @@ WORKFLOW_DISPLAY_KO = {
 
 def _get_session(sid: str) -> dict:
     if sid not in SESSIONS:
-        SESSIONS[sid] = {"messages": [], "injected_workflows": set()}
+        SESSIONS[sid] = {
+            "messages": [],
+            "injected_workflows": set(),
+            "active_subagent": None,
+            "subagent_history": [],
+            "last_tool_events": [],
+            "last_artifacts": [],
+        }
     return SESSIONS[sid]
 
 
@@ -116,20 +93,53 @@ def _classify_message(msg: dict):
             "workflow_display": display,
         }
 
+    if role == "assistant" and content.startswith("[워크플로우 위임 시작:"):
+        wf = content.replace("[워크플로우 위임 시작:", "").rstrip("]").strip()
+        display = WORKFLOW_DISPLAY_KO.get(wf, wf)
+        return {
+            "phase": "subagent_started",
+            "text": f"🧩 '{display}' 서브에이전트 실행 중",
+            "workflow_id": wf,
+            "workflow_display": display,
+        }
+
+    if role == "user" and content.startswith("[워크플로우 위임 종료:"):
+        # 형식: [워크플로우 위임 종료: <wf_id> | steps=N | tools=M | summary=<text>]
+        inner = content.replace("[워크플로우 위임 종료:", "").rstrip("]").strip()
+        parts = [p.strip() for p in inner.split("|")]
+        wf = parts[0] if parts else ""
+        kv = {}
+        for p in parts[1:]:
+            if "=" in p:
+                k, _, v = p.partition("=")
+                kv[k.strip()] = v.strip()
+        display = WORKFLOW_DISPLAY_KO.get(wf, wf)
+        return {
+            "phase": "subagent_finished",
+            "text": f"✅ '{display}' 워크플로우 완료 — {kv.get('summary', '')}",
+            "workflow_id": wf,
+            "workflow_display": display,
+            "step_count": kv.get("steps", ""),
+            "tools_count": kv.get("tools", ""),
+            "summary": kv.get("summary", ""),
+        }
+
     if role == "assistant" and content.startswith("[도구 호출:"):
-        name = content.replace("[도구 호출:", "").replace("]", "").strip()
+        name, call_id = _parse_marker_name_id(content, "[도구 호출:")
         display = TOOL_DISPLAY_KO.get(name, name)
         return {
             "phase": "tool_call",
             "text": f"'{display}' 사용 중...",
             "tool_name": name,
             "tool_display": display,
+            "call_id": call_id,
         }
 
     if role == "user" and content.startswith("[도구 실행 결과:"):
         body = content.split("\n", 1)[1] if "\n" in content else ""
         result = body.split("\n\n위 결과를")[0].strip()
-        name = content.split("\n", 1)[0].replace("[도구 실행 결과:", "").replace("]", "").strip()
+        header = content.split("\n", 1)[0]
+        name, call_id = _parse_marker_name_id(header, "[도구 실행 결과:")
         display = TOOL_DISPLAY_KO.get(name, name)
 
         # 도구별 특수 처리: 결과에서 클라이언트에 직접 노출할 정보 추출
@@ -150,6 +160,24 @@ def _classify_message(msg: dict):
             "tool_display": display,
             "result": preview,
             "mail_url": mail_url,
+            "call_id": call_id,
+        }
+
+    if role == "user" and content.startswith("[도구 오류:"):
+        body = content.split("\n", 1)[1] if "\n" in content else ""
+        err_text = body.split("\n\n위 오류를")[0].strip()
+        header = content.split("\n", 1)[0]
+        name, call_id = _parse_marker_name_id(header, "[도구 오류:")
+        display = TOOL_DISPLAY_KO.get(name, name)
+        return {
+            "phase": "tool_result",
+            "text": f"'{display}' 인자 오류 — 재시도",
+            "tool_name": name,
+            "tool_display": display,
+            "result": err_text[:500],
+            "mail_url": None,
+            "call_id": call_id,
+            "is_error": True,
         }
 
     if role == "assistant" and not content.startswith("["):
@@ -244,6 +272,18 @@ def _strip_thinking_tags(text: str) -> str:
             flags=re.DOTALL | re.IGNORECASE,
         )
     return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def _parse_marker_name_id(header_line: str, prefix: str):
+    """
+    `[도구 호출: name #cid]` 형식의 헤더에서 (name, call_id)를 추출.
+    `#cid`가 없는 구버전 형식도 지원 (call_id는 빈 문자열 반환).
+    """
+    inner = header_line.replace(prefix, "").rstrip("]").strip()
+    if "#" in inner:
+        name_part, _, cid_part = inner.partition("#")
+        return name_part.strip(), cid_part.strip()
+    return inner, ""
 
 
 def _extract_mail_url_from_result(result_str: str):
@@ -363,11 +403,8 @@ def _stream_events(user_input: str, sess: dict):
 
     def worker():
         try:
-            result_holder["result"] = run(
-                user_input,
-                sess["messages"],
-                sess["injected_workflows"],
-            )
+            # Phase 3: state dict 전체를 넘겨 active_subagent 등이 보존되도록 한다.
+            result_holder["result"] = run(user_input, state=sess)
         except Exception as e:
             error_holder["error"] = str(e)
 
@@ -440,16 +477,25 @@ def reset():
 @app.route("/tools")
 def list_tools():
     """등록된 도구 목록 반환 (도구·스킬 확인 모달용)."""
-    from runner.tools import TOOL_DEFINITIONS, _PYTHON_TOOLS
+    from runner.tools import TOOL_DEFINITIONS
+    from runner import skill_loader
     items = []
     for tool in TOOL_DEFINITIONS:
         fn = tool["function"]
         name = fn["name"]
+        skill = skill_loader.get_skill(name)
+        if skill is not None:
+            tool_type = skill.type
+            display = skill.display_ko or TOOL_DISPLAY_KO.get(name, name)
+        else:
+            # 메타 도구(list_skills 등)는 skill_loader에 없음
+            tool_type = "meta"
+            display = TOOL_DISPLAY_KO.get(name, name)
         items.append({
             "id": name,
-            "name": TOOL_DISPLAY_KO.get(name, name),
+            "name": display,
             "description": fn.get("description", ""),
-            "type": "python" if name in _PYTHON_TOOLS else "llm",
+            "type": tool_type,
             "parameters": fn.get("parameters", {}).get("properties", {}),
             "required": fn.get("parameters", {}).get("required", []),
         })
@@ -858,6 +904,11 @@ INDEX_HTML = """<!DOCTYPE html>
     border-color: hsla(280, 20%, 85%, 1);
     color: var(--result);
   }
+  .step-card.tool.done.error {
+    background: hsla(20, 60%, 97%, 1);
+    border-color: hsla(20, 50%, 82%, 1);
+    color: hsl(20, 60%, 35%);
+  }
   .step-card.tool .header-line {
     display: flex; align-items: center; gap: 8px;
   }
@@ -868,6 +919,29 @@ INDEX_HTML = """<!DOCTYPE html>
     max-height: 200px; overflow-y: auto;
     border: 1px solid var(--border);
   }
+
+  /* 단계 스택 — 기본 접힘. 펼치면 전체 stack + 각 결과 표시 */
+  .steps-stack {
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .steps-stack.collapsed > .step-card:not(:last-of-type) { display: none; }
+  .steps-stack.collapsed .result-body,
+  .steps-stack.collapsed .mail-link-row { display: none; }
+  /* 최종 응답이 도착하면 접힘 상태에서 카드까지 모두 숨김 (토글만 노출) */
+  .steps-stack.finalized.collapsed > .step-card { display: none; }
+  .steps-toggle {
+    align-self: flex-start;
+    background: var(--surface-sand); border: 1px solid var(--border);
+    color: var(--text-soft); font-size: .78rem; font-weight: 600;
+    padding: 4px 12px; border-radius: 12px; cursor: pointer;
+    font-family: inherit;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: background-color .15s;
+  }
+  .steps-toggle:hover { background: var(--border); }
+  .steps-toggle.hidden { display: none; }
+  .steps-toggle .chevron { transition: transform .2s; display: inline-block; }
+  .steps-stack:not(.collapsed) .steps-toggle .chevron { transform: rotate(180deg); }
 
   .typing-cursor {
     display: inline-block; width: 2px; height: 1em;
@@ -1209,17 +1283,103 @@ function addAIContainer(chatDom) {
   return row;
 }
 
+// 단계 스택 컨테이너를 lazy 생성 (기본 접힘)
+function getStepsStack(content, live) {
+  let stack = content.querySelector('.steps-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.className = 'steps-stack collapsed';
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    toggle.className = 'steps-toggle hidden';
+    toggle.innerHTML = `<span class="chevron">▾</span><span class="toggle-label">단계 펼치기</span>`;
+    toggle.addEventListener('click', () => {
+      stack.classList.toggle('collapsed');
+      const label = toggle.querySelector('.toggle-label');
+      if (stack.classList.contains('collapsed')) {
+        const n = stack.querySelectorAll('.step-card').length;
+        label.textContent = stack.classList.contains('finalized')
+          ? `진행 단계 ${n}개 보기`
+          : `단계 ${n}개 펼치기`;
+      } else {
+        label.textContent = '접기';
+      }
+      scrollToBottom();
+    });
+    stack.appendChild(toggle);
+    content.insertBefore(stack, live);
+  }
+  return stack;
+}
+
+function updateStackToggle(stack) {
+  const toggle = stack.querySelector('.steps-toggle');
+  const label = toggle.querySelector('.toggle-label');
+  const n = stack.querySelectorAll('.step-card').length;
+  if (n <= 1) {
+    toggle.classList.add('hidden');
+  } else {
+    toggle.classList.remove('hidden');
+    if (stack.classList.contains('collapsed')) {
+      label.textContent = `단계 ${n}개 펼치기`;
+    } else {
+      label.textContent = '접기';
+    }
+  }
+}
+
 // tool_call → tool_result 카드 통합용 맵
 function appendStepCard(aiRow, ev, ctx) {
   const content = aiRow.querySelector('.ai-content');
   const live = content.querySelector('[data-role="live"]');
+  const stack = getStepsStack(content, live);
 
   if (ev.phase === "workflow_loaded") {
     const display = ev.workflow_display || ev.workflow_id || "";
     const card = document.createElement("div");
     card.className = "step-card workflow";
     card.innerHTML = `<span>📋</span> <span>${escapeHtml(ev.text)}</span>`;
-    content.insertBefore(card, live);
+    stack.appendChild(card);
+    updateStackToggle(stack);
+    scrollToBottom();
+  }
+  else if (ev.phase === "subagent_started") {
+    const card = document.createElement("div");
+    card.className = "step-card workflow subagent";
+    card.innerHTML = `
+      <div class="header-line">
+        <div class="spinner-sm"></div>
+        <span>${escapeHtml(ev.text)}</span>
+      </div>
+    `;
+    ctx.activeSubagent = card;
+    stack.appendChild(card);
+    updateStackToggle(stack);
+    scrollToBottom();
+  }
+  else if (ev.phase === "subagent_finished") {
+    // 시작 카드를 완료 상태로 갱신
+    const card = ctx.activeSubagent;
+    if (card) {
+      card.classList.add("done");
+      card.querySelector(".header-line").innerHTML = `
+        <span>✅</span>
+        <span>${escapeHtml(ev.text)}</span>
+      `;
+      const meta = `steps=${ev.step_count || "?"} · tools=${ev.tools_count || "0"}`;
+      const body = document.createElement("div");
+      body.className = "result-body";
+      body.textContent = meta;
+      card.appendChild(body);
+      ctx.activeSubagent = null;
+    } else {
+      // 시작 카드가 없으면 단독 카드로
+      const newCard = document.createElement("div");
+      newCard.className = "step-card workflow subagent done";
+      newCard.innerHTML = `<span>✅</span> <span>${escapeHtml(ev.text)}</span>`;
+      stack.appendChild(newCard);
+    }
+    updateStackToggle(stack);
     scrollToBottom();
   }
   else if (ev.phase === "tool_call") {
@@ -1232,19 +1392,32 @@ function appendStepCard(aiRow, ev, ctx) {
         <span>🔧 '${escapeHtml(display)}' 사용 중...</span>
       </div>
     `;
-    ctx.activeTools[ev.tool_name] = card;
-    content.insertBefore(card, live);
+    // call_id 우선 매핑, 없으면 도구 이름으로 폴백 (구버전 호환)
+    const key = ev.call_id || ev.tool_name;
+    ctx.activeTools[key] = card;
+    stack.appendChild(card);
+    updateStackToggle(stack);
     scrollToBottom();
   }
   else if (ev.phase === "tool_result") {
     const display = ev.tool_display || ev.tool_name;
-    const card = ctx.activeTools[ev.tool_name];
+    const key = ev.call_id || ev.tool_name;
+    const card = ctx.activeTools[key];
     if (card) {
       card.classList.add("done");
-      card.querySelector(".header-line").innerHTML = `
-        <span>✅</span>
-        <span>'${escapeHtml(display)}' 사용 완료</span>
-      `;
+      const isError = !!ev.is_error;
+      if (isError) {
+        card.classList.add("error");
+        card.querySelector(".header-line").innerHTML = `
+          <span>⚠️</span>
+          <span>'${escapeHtml(display)}' 인자 오류 — 재시도</span>
+        `;
+      } else {
+        card.querySelector(".header-line").innerHTML = `
+          <span>✅</span>
+          <span>'${escapeHtml(display)}' 사용 완료</span>
+        `;
+      }
       const result = (ev.result || "").trim();
       if (result) {
         const body = document.createElement("div");
@@ -1255,6 +1428,7 @@ function appendStepCard(aiRow, ev, ctx) {
       // 메일 링크 도구 결과면 클릭 가능 링크 버튼 추가
       if (ev.mail_url) {
         const linkRow = document.createElement("div");
+        linkRow.className = "mail-link-row";
         linkRow.style.cssText = "display:flex; gap:8px; margin-top:6px;";
         const linkBtn = document.createElement("a");
         linkBtn.href = ev.mail_url;
@@ -1266,7 +1440,7 @@ function appendStepCard(aiRow, ev, ctx) {
         linkRow.appendChild(linkBtn);
         card.appendChild(linkRow);
       }
-      delete ctx.activeTools[ev.tool_name];
+      delete ctx.activeTools[key];
       scrollToBottom();
     }
   }
@@ -1324,6 +1498,22 @@ function finalizeAI(aiRow, finalText, finalHtml, suggestions) {
   const content = aiRow.querySelector('.ai-content');
   const live = content.querySelector('[data-role="live"]');
   if (live) live.remove();
+
+  // 최종 응답 도착 — 단계 스택을 finalized로 마킹해 카드까지 모두 접음
+  const stack = content.querySelector('.steps-stack');
+  if (stack) {
+    stack.classList.add('finalized');
+    stack.classList.add('collapsed');
+    const toggle = stack.querySelector('.steps-toggle');
+    if (toggle) {
+      const n = stack.querySelectorAll('.step-card').length;
+      if (n >= 1) {
+        toggle.classList.remove('hidden');
+        const label = toggle.querySelector('.toggle-label');
+        if (label) label.textContent = `진행 단계 ${n}개 보기`;
+      }
+    }
+  }
 
   // ① 텍스트 버블 (있을 때만)
   if (finalText && finalText.trim()) {

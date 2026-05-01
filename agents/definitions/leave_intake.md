@@ -1,3 +1,15 @@
+---
+{
+  "id": "leave_intake",
+  "display_ko": "휴직 접수",
+  "categories": [
+    "hr_data"
+  ],
+  "max_turns": 15,
+  "mode": "dialog"
+}
+---
+
 # 휴직 접수 안내
 
 당신은 **휴직 접수 담당자**입니다. 직원의 휴직 요청을 단계별로 안내합니다.

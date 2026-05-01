@@ -11,32 +11,53 @@ from runner import loop
 from runner.utils import log
 
 
-def run(user_input: str, messages: list = None, injected_workflows: set = None) -> dict:
+def run(user_input: str, messages: list = None, injected_workflows: set = None,
+        state: dict = None) -> dict:
     """
     단일 턴 실행 API.
 
-    messages와 injected_workflows를 넘기면 이어서 대화(상태 유지).
-    반환: {"success": bool, "message": str, "messages": list, "injected_workflows": set}
+    Phase 3부터는 state dict를 넘기는 것을 권장한다:
+        state = {"messages": [...], "injected_workflows": set, "active_subagent": None|dict, ...}
+        result = run(user_input, state=state)
+        # state는 in-place로 갱신됨
+
+    레거시 호출(messages, injected_workflows)도 지원하지만 active_subagent는 보존되지 않는다.
+
+    반환: {"success", "message", "messages", "injected_workflows", "active_subagent",
+           "tool_events", "artifacts", "subagent_history"}
     """
     if not user_input or not user_input.strip():
         return {
             "success": False,
             "message": "입력이 비어 있습니다.",
-            "messages": messages or [],
-            "injected_workflows": injected_workflows or set(),
+            "messages": (state or {}).get("messages", messages or []),
+            "injected_workflows": (state or {}).get("injected_workflows", injected_workflows or set()),
+            "active_subagent": (state or {}).get("active_subagent"),
+            "tool_events": [],
+            "artifacts": [],
+            "subagent_history": (state or {}).get("subagent_history", []),
         }
 
-    if messages is None:
-        messages = []
-    if injected_workflows is None:
-        injected_workflows = set()
+    if state is None:
+        state = {
+            "messages": messages if messages is not None else [],
+            "injected_workflows": injected_workflows if injected_workflows is not None else set(),
+            "active_subagent": None,
+            "subagent_history": [],
+            "last_tool_events": [],
+            "last_artifacts": [],
+        }
 
-    message = loop.turn(user_input, messages, injected_workflows)
+    message = loop.turn(user_input, state)
     return {
         "success": True,
         "message": message,
-        "messages": messages,
-        "injected_workflows": injected_workflows,
+        "messages": state["messages"],
+        "injected_workflows": state["injected_workflows"],
+        "active_subagent": state.get("active_subagent"),
+        "tool_events": state.get("last_tool_events", []),
+        "artifacts": state.get("last_artifacts", []),
+        "subagent_history": state.get("subagent_history", []),
     }
 
 
@@ -45,8 +66,14 @@ def interactive_loop():
     print("종료: 'exit' 또는 'quit'")
     print("=================================================")
 
-    messages: list = []
-    injected_workflows: set = set()
+    state: dict = {
+        "messages": [],
+        "injected_workflows": set(),
+        "active_subagent": None,
+        "subagent_history": [],
+        "last_tool_events": [],
+        "last_artifacts": [],
+    }
 
     while True:
         try:
@@ -59,14 +86,14 @@ def interactive_loop():
             if not user_input:
                 continue
 
-            result = run(user_input, messages=messages, injected_workflows=injected_workflows)
-            messages = result["messages"]
-            injected_workflows = result["injected_workflows"]
+            result = run(user_input, state=state)
 
             print("\n" + "-" * 50)
             print("[AI]")
             print(result["message"])
-            log(f"[Debug] 턴={sum(1 for m in messages if m['role'] == 'user' and '[워크플로우' not in m['content'])} | 주입된 워크플로우={injected_workflows}")
+            sub = state.get("active_subagent")
+            sub_label = sub["workflow_id"] if sub else "(없음)"
+            log(f"[Debug] 턴={sum(1 for m in state['messages'] if m['role'] == 'user' and '[워크플로우' not in m['content'])} | 활성 워크플로우={sub_label} | 종료된 워크플로우 수={len(state.get('subagent_history', []))}")
 
         except KeyboardInterrupt:
             print("\n시스템을 종료합니다.")

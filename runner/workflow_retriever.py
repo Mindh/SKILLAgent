@@ -11,6 +11,7 @@
 """
 import json
 import os
+import re
 from typing import List, Optional
 
 from runner.utils import load_file, log
@@ -19,6 +20,10 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _REGISTRY_PATH = os.path.join(BASE_DIR, "agents", "agent_registry.json")
 
 _registry_cache: Optional[list] = None
+
+# 워크플로우 .md 프론트매터(`--- ... ---`) 캐시: id → (meta_dict, body_str)
+_WF_META_CACHE = {}  # type: dict
+_FRONTMATTER_RE = re.compile(r"^\s*---\s*\n(.*?)\n---\s*\n?(.*)$", re.DOTALL)
 
 
 def _load_registry() -> list:
@@ -62,8 +67,55 @@ def retrieve_workflows(
 
 
 def load_workflow_definition(agent_id: str) -> str:
-    """agents/definitions/{agent_id}.md 파일을 읽어 반환한다."""
+    """agents/definitions/{agent_id}.md 파일 전문(프론트매터 포함)을 반환."""
     return load_file(f"agents/definitions/{agent_id}.md")
+
+
+def load_workflow_body(agent_id: str) -> str:
+    """프론트매터를 제외한 본문만 반환 (서브에이전트 system prompt에 사용)."""
+    _, body = _load_workflow_meta_and_body(agent_id)
+    return body
+
+
+def load_workflow_meta(agent_id: str) -> dict:
+    """
+    프론트매터 dict를 반환. 없으면 빈 dict.
+
+    표준 키:
+      - id: str
+      - display_ko: str
+      - categories: List[str]
+      - max_turns: int
+      - mode: str ("dialog" 등)
+    """
+    meta, _ = _load_workflow_meta_and_body(agent_id)
+    return meta
+
+
+def _load_workflow_meta_and_body(agent_id: str):
+    if agent_id in _WF_META_CACHE:
+        return _WF_META_CACHE[agent_id]
+    text = load_workflow_definition(agent_id)
+    meta = {}
+    body = text
+    m = _FRONTMATTER_RE.match(text or "")
+    if m:
+        raw = m.group(1).strip()
+        body = m.group(2)
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                meta = parsed
+        except (json.JSONDecodeError, ValueError) as e:
+            log(f"[WorkflowRetriever] {agent_id} 프론트매터 파싱 실패: {e}")
+    _WF_META_CACHE[agent_id] = (meta, body)
+    return _WF_META_CACHE[agent_id]
+
+
+def reload_workflow_cache():
+    global _registry_cache
+    _registry_cache = None
+    _WF_META_CACHE.clear()
 
 
 # ── 검색 구현 ─────────────────────────────────────────────────────────────────
