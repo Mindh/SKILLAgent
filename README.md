@@ -1,365 +1,396 @@
 # Skill Base AI
 
-한국 기업 HR 담당자를 위한 **ReAct-style 에이전틱 AI** 시스템입니다.
-Function calling을 지원하지 않는 모델에서도 동작하며, 100개 이상의 워크플로우를 동적으로 처리할 수 있습니다.
+한국 기업 HR 담당자를 위한 **3계층 ReAct 에이전트** 시스템입니다.
+Function calling을 지원하지 않는 자체 호스팅 모델(Gemma·Llama 등)에서도 동작하며, 다음 세 가지로 구성됩니다.
+
+1. **도구 호출 (Phase 1)** — 한 응답에 여러 `<tool_call>`을 동시에 호출하고, 잘못된 인자는 모델이 스스로 교정
+2. **Skill 카탈로그 (Phase 2)** — 33개 스킬을 7개 카테고리로 묶어 첫 턴엔 요약만, 필요할 때 펼쳐 사용 (context 80%+ 절감)
+3. **워크플로우 서브에이전트 (Phase 3)** — 11개 HR 업무 워크플로우를 격리된 in-process 서브에이전트로 실행 (부모 컨텍스트 보호)
 
 > **GitHub**: https://github.com/Mindh/SKILLAgent
-
----
-
-## 특징
-
-- **Function Calling 불필요**: `<tool_call>` 태그 기반 프롬프트 방식으로 도구 호출 — Gemma, Llama 등 자체 호스팅 모델 지원
-- **System Role 불필요**: 시스템 프롬프트를 `user/assistant` 교환으로 주입 — 모든 OpenAI 호환 엔드포인트 지원
-- **동적 워크플로우 주입**: 워크플로우 정의를 시스템 프롬프트에 하드코딩하지 않고, 사용자 입력에 따라 필요한 워크플로우만 대화에 주입
-- **워크플로우 전환**: 워크플로우 진행 중 다른 워크플로우로 전환하고 다시 돌아오는 것을 지원
-- **메시지 기반 상태 관리**: 별도 세션 객체 없이 `messages` 리스트 하나로 전체 대화 상태 관리
 
 ---
 
 ## 빠른 시작
 
 ```bash
-# 1. 클론
 git clone https://github.com/Mindh/SKILLAgent.git
 cd SKILLAgent
-
-# 2. 패키지 설치
 pip install -r requirements.txt
-# (Google AI Studio 등 OpenAI 호환 API를 쓰려면 추가로: pip install openai)
 
-# 3. API 키 설정 (둘 중 하나)
-export GEMINI_API_KEY="AIzaSy..."          # 환경변수
-# 또는 runner/llm.py의 GEMINI_API_KEY 값 직접 수정
+# API 키 설정 (둘 중 하나 — Google AI Studio용)
+export GEMINI_API_KEY="AIzaSy..."
+# 또는 runner/llm.py 상단의 GEMINI_API_KEY 값 직접 수정
+# 자체 호스팅 모델을 쓰면 runner/llm.py만 교체하면 됨 (자세한 내용은 아래 "모델 교체" 절)
 
-# 4. 실행
-python runner/run.py                        # CLI 대화형 모드
-python runner/run.py "1234 + 5678"          # CLI 단일 실행 모드
-python runner/web.py                        # 웹 UI 서버 (http://localhost:5000)
+# 실행
+python runner/run.py                     # CLI 대화형
+python runner/run.py "1234 + 5678"       # CLI 단발 실행
+python runner/web.py                     # 웹 UI (http://localhost:5000)
 ```
 
 ---
 
-## 웹 UI 모드
-
-```bash
-python runner/web.py                        # 0.0.0.0:5000 (외부 접속 허용)
-python runner/web.py --port 8080            # 포트 변경
-python runner/web.py --host 127.0.0.1       # 로컬 전용
-```
-
-브라우저에서 접속:
-- 로컬: `http://localhost:5000`
-- 외부 서버: `http://<서버IP>:5000` (방화벽에서 해당 포트 인바운드 허용 필요)
-
-### 웹 UI 특징
-
-- **일반 챗 인터페이스** — 사용자/AI 채팅 버블 형태
-- **AI 동작 실시간 표시** — "워크플로우 찾는 중...", "calculator 실행 중..." 등 진행 상태를 SSE(Server-Sent Events)로 푸시
-- **타자기 효과** — AI 답변이 한 글자씩 출력되어 스트리밍처럼 보임
-- **처리 과정 카드** — 도구 호출, 워크플로우 주입, 결과 등 모든 단계를 접을 수 있는 타임라인으로 표시
-- **세션 유지** — 대화 컨텍스트가 서버 메모리에 보존되어 멀티턴 대화 가능
-
-> **구현 노트**: `runner/loop.py`, `tools.py`, `llm.py`, `run.py` 등 기존 코드는 일절 수정하지 않습니다.
-> `runner/web.py`가 `messages` 리스트의 in-place 갱신을 백그라운드 스레드에서 polling해 진행 이벤트를 추출합니다.
-> 최종 답변 텍스트는 백엔드에서 한 번에 도착하지만, 프론트엔드 타자기 효과로 시각적으로 스트리밍처럼 처리됩니다.
-
-운영 환경 배포 권장:
-```bash
-pip install gunicorn
-gunicorn -b 0.0.0.0:5000 -w 1 --threads 4 runner.web:app
-```
-(SSE 특성상 worker 1 + threads 4 권장. 다중 worker는 세션 공유 문제로 권장하지 않음.)
-
----
-
-## 아키텍처 개요
+## 한눈에 보는 아키텍처
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                   사용자 입력                             │
-└──────────────────────┬───────────────────────────────────┘
-                       │
-                       ▼
-┌──────────────────────────────────────────────────────────┐
-│              runner/loop.py  (ReAct Loop)                │
-│                                                          │
-│  ① 첫 턴: 도구 목록 주입 (messages에 1회만)              │
-│  ② 워크플로우 검색 → 관련 정의 동적 주입                 │
-│  ③ 모델 호출 (system prompt + messages)                  │
-│  ④ <tool_call> 감지 → 도구 실행 → 결과 주입 → 재호출    │
-│     감지 없음 → 최종 응답 반환                           │
-└──────────────────────────────────────────────────────────┘
-                       │
-          ┌────────────┴────────────┐
-          │                        │
-          ▼                        ▼
-┌──────────────────┐    ┌───────────────────────┐
-│  runner/tools.py │    │ workflow_retriever.py  │
-│                  │    │                        │
-│ Python 함수 도구  │    │ 키워드 매칭 (기본)     │
-│ - calculator     │    │ 임베딩 검색 (선택)     │
-│ - employee_lookup│    │ → agent_registry.json  │
-│ - candidate_lookup    │ → definitions/*.md     │
-│ - new_employee_  │    └───────────────────────┘
-│   lookup         │
-│                  │
-│ LLM 도구         │
-│ - translate      │
-│ - summarize      │
-│ - jd_generator   │
-│ - ... (9개)      │
-└──────────────────┘
-```
-
-### 단일 턴 실행 흐름
-
-```
-[첫 턴]
-  messages = []
-  → 도구 목록 주입 (messages에 user/assistant 쌍으로 1회)
-  → 사용자 입력 관련 워크플로우 검색 및 주입
-  → 사용자 메시지 추가
-  → 모델 호출
-
-[도구 호출이 있을 때]
-  모델 응답에 <tool_call>{"name": "...", "args": {...}}</tool_call> 포함
-  → 도구 실행
-  → [도구 호출: tool_name] 형태로 중간 응답 저장 (raw 태그 대신)
-  → [도구 실행 결과: tool_name] 메시지 주입
-  → 모델 재호출 → 최종 응답
-
-[도구 호출이 없을 때]
-  → 텍스트 응답을 messages에 저장 후 반환
+사용자 입력
+   │
+   ▼
+┌──────────────────────────────────────────────────────────────┐
+│              runner/loop.py — 부모 ReAct 루프                │
+│                                                              │
+│  ① 첫 턴: 카테고리 요약 주입 (1.3KB, 전체 schema X)          │
+│  ② 워크플로우 매칭 검사 (키워드 → LLM 분류)                  │
+│      ├ 매칭됨 → 서브에이전트 위임 (③로 점프)                 │
+│      └ 없음   → 직접 처리 (④)                                │
+│                                                              │
+│  ③ 서브에이전트 활성화 (격리된 messages·자체 ReAct)          │
+│      ├ 사용자 입력 → 서브에이전트로 라우팅                   │
+│      ├ <workflow_complete> 태그 또는 max_turns로 종료         │
+│      └ 부모엔 한 줄 요약만 흡수                              │
+│                                                              │
+│  ④ 다중 <tool_call> 추출 → 검증 → 실행 → 결과 주입 → 재호출  │
+└──────────────────────────────────────────────────────────────┘
+   │                    │                       │
+   ▼                    ▼                       ▼
+┌──────────┐    ┌──────────────┐    ┌──────────────────────┐
+│ tools.py │    │ skill_loader │    │ workflow_retriever   │
+│          │    │              │    │                      │
+│ 도구     │    │ skills/      │    │ 키워드 매칭 (1차)    │
+│ 디스패치 │←──│ <cat>/<name>/│    │ LLM 분류기 (2차)     │
+│ 검증     │    │ SKILL.md     │    │ → frontmatter 로드   │
+│ 메타도구 │    │              │    │                      │
+│ list_    │    │ 33 skills /  │    │ 11 workflows         │
+│ skills   │    │ 7 categories │    │                      │
+└──────────┘    └──────────────┘    └──────────────────────┘
+                                            │
+                                            ▼
+                                    ┌──────────────────────┐
+                                    │  runner/subagent.py  │
+                                    │  격리 ReAct 루프     │
+                                    │  (자체 messages)     │
+                                    └──────────────────────┘
 ```
 
 ---
 
-## 디렉토리 구조
+## 1. 도구 호출 (Phase 1)
+
+### `<tool_call>` 태그 + 다중 호출
+
+모델은 응답 안에 다음 형식으로 도구를 호출합니다. **한 응답에 여러 블록**을 넣으면 동시에 실행됩니다.
+
+```
+연차 잔여와 출장비를 같이 알아볼게요.
+<tool_call>
+{"name": "leave_balance_calculator", "args": {"employee_name": "홍길동"}}
+</tool_call>
+<tool_call>
+{"name": "expense_calculator", "args": {"destination": "부산", "days": 2, "transport": "ktx"}}
+</tool_call>
+```
+
+### 호출 ID로 1:1 매핑
+
+각 호출에 자동으로 `call_id`가 부여되어(`i1c1`, `i1c2`, …) 결과·오류 메시지가 정확히 매핑됩니다.
+
+```
+[도구 호출: leave_balance_calculator #i1c1]
+[도구 실행 결과: leave_balance_calculator #i1c1] {"days_remaining": 12}
+[도구 호출: expense_calculator #i1c2]
+[도구 실행 결과: expense_calculator #i1c2] {"total_krw": 320000}
+```
+
+### 인자 검증 + 자동 재시도
+
+호출 직전 `validate_args()`로 필수 파라미터를 확인합니다. 누락 시 모델에게 교정 피드백:
+
+```
+[도구 오류: jd_generator #i1c1]
+필수 파라미터 누락 또는 비어 있음: job_title
+
+위 오류를 참고해 올바른 인자로 다시 호출하거나, 사용자에게 추가 정보를 요청하세요.
+```
+
+### 파싱 견고성
+
+다음 모두 인식합니다:
+- `<tool_call>{...}</tool_call>` (권장)
+- ` ```tool_call ... ``` ` (펜스 라벨)
+- ` ```json ... ``` ` 안의 `{"name": ..., "args": ...}` 객체 (폴백)
+- `arguments` ↔ `args` 키 자동 별칭
+- 중첩 brace 안전 처리 (균형 매칭)
+
+---
+
+## 2. Skill 카탈로그 (Phase 2)
+
+### 디렉터리 구조
+
+```
+skills/
+├── hr_data/         (5개)  직원·후보자 조회, 휴가/출장비 계산
+│   ├── employee_lookup/
+│   │   ├── SKILL.md       ← 프론트매터 + 본문
+│   │   └── tool.py        ← Python 실행 함수
+│   └── ...
+├── hr_text/         (5개)  번역·요약·휴가/이력서 파싱
+│   └── translate/
+│       ├── SKILL.md
+│       └── prompt.md      ← LLM 도구 프롬프트
+├── hr_writing/      (5개)  JD·오퍼레터·체크리스트·공지문
+├── hr_eval/         (2개)  적합도·평가양식
+├── hr_knowledge/    (3개)  노동법·매너·연봉
+├── report/          (10개) 보고서·PPT 작성 10단계
+└── misc/            (3개)  계산기·메일·포스터
+```
+
+### SKILL.md 프론트매터
+
+```markdown
+---
+{
+  "name": "employee_lookup",
+  "category": "hr_data",
+  "type": "python",
+  "display_ko": "직원 정보 조회",
+  "description": "직원 이름으로 사내 인사 정보를 조회합니다.",
+  "trigger_keywords": ["직원", "사번 조회"],
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "employee_name": {"type": "string", "description": "조회할 직원 이름"}
+    },
+    "required": ["employee_name"]
+  }
+}
+---
+
+# 직원 정보 조회
+
+(본문 — 사용 가이드, 예시 등)
+```
+
+### 진보적 노출 (Progressive Disclosure)
+
+전체 schema(7,100자)를 매번 컨텍스트에 욱여넣지 않고, 첫 턴엔 카테고리 요약(1,300자, **81% 절감**)만 보여줍니다:
+
+```
+[사용 가능한 도구 카테고리]
+필요한 카테고리만 펼쳐 사용하세요. 상세는
+<tool_call>{"name":"list_skills","args":{"category":"hr_writing"}}</tool_call>
+로 호출.
+
+### HR 데이터 조회·계산 (hr_data, 5개)
+직원·후보자·신규 입사자 조회, 잔여 휴가/출장비 계산
+포함 도구: candidate_lookup, employee_lookup, expense_calculator, leave_balance_calculator, new_employee_lookup
+
+### HR 문서 작성 (hr_writing, 5개)
+JD·오퍼레터·온보딩/퇴사 체크리스트·사내 공지 작성
+포함 도구: announcement_writer, jd_generator, ...
+
+(7개 카테고리 모두 표시)
+```
+
+모델이 처음 보는 카테고리의 도구를 쓰기 전에 `list_skills`로 펼쳐 schema를 확인합니다. 이미 잘 아는 도구(예: `calculator`)는 바로 호출해도 동작합니다 — 전체 schema는 항상 메모리에 있고, 단지 컨텍스트에 안 넣을 뿐.
+
+---
+
+## 3. 워크플로우 서브에이전트 (Phase 3)
+
+### 부모 vs 서브에이전트 격리
+
+기존엔 워크플로우 정의(.md 본문)를 부모 messages에 텍스트로 주입하고 같은 컨텍스트에서 진행했습니다. 이제는 **격리된 in-process 서브에이전트**가 자체 messages 리스트로 실행됩니다.
+
+```
+[부모 messages — 격리 후]
+[1] user      "휴직 신청하고 싶어요"
+[2] assistant [워크플로우 위임 시작: leave_intake]
+[3] assistant 직원 이름과 휴직 사유를 알려주세요.        ← 서브에이전트가 생성
+[4] user      "김철수, 육아휴직"
+[5] assistant 받았습니다. 다음으로 ...                    ← 서브에이전트가 생성
+[6] user      "네 진행해주세요"
+[7] assistant 모든 절차 완료되었습니다.                   ← 서브에이전트가 생성 (태그 제거됨)
+[8] user      [워크플로우 위임 종료: leave_intake | steps=3 | tools=2 | summary=김철수 육아휴직 접수 완료]
+
+[서브에이전트 messages — 부모와 완전 분리]
+[1] user      [도구 카테고리 + hr_data 자동 펼침]
+[2] assistant 네, 절차와 도구를 확인했습니다.
+[3] user      "휴직 신청하고 싶어요"
+[4] assistant 직원 이름과 휴직 사유를 알려주세요.
+[5] user      "김철수, 육아휴직"
+[6] assistant [도구 호출: employee_lookup #s2c1]
+[7] user      [도구 실행 결과: employee_lookup #s2c1] {...}
+[8] assistant 받았습니다. 다음으로 ...
+... (서브에이전트만 보유)
+```
+
+→ 부모 컨텍스트는 사용자 화면에 보이는 응답 + 짧은 위임 마커만 남음. 도구 호출·중간 추론은 모두 서브에이전트 안에서 처리되어 **부모 컨텍스트가 부풀지 않습니다**.
+
+### 워크플로우 프론트매터
+
+각 `agents/definitions/<id>.md`는 다음 메타데이터로 시작합니다:
+
+```markdown
+---
+{
+  "id": "leave_intake",
+  "display_ko": "휴직 접수",
+  "categories": ["hr_data"],     ← 서브에이전트 첫 턴에 자동 펼칠 카테고리
+  "max_turns": 15,                ← 무한 루프 방지
+  "mode": "dialog"                ← 다턴 대화형
+}
+---
+
+# 휴직 접수 안내
+... (절차 본문)
+```
+
+### 종료 신호
+
+서브에이전트는 다음 중 하나로 종료됩니다:
+- 응답에 `<workflow_complete>한 줄 요약</workflow_complete>` 태그 포함
+- `max_turns` 도달 (안전장치)
+- 사용자가 채팅 초기화
+
+종료 시 부모 messages에는 한 줄 요약만 추가되고, `state['subagent_history']`에 audit trail(workflow_id, summary, step_count, tools_used)이 보존됩니다.
+
+---
+
+## 디렉터리 구조
 
 ```
 Skill Base AI/
+├── runner/                     # 실행 엔진
+│   ├── run.py                  # 진입점 — run() API + interactive_loop()
+│   ├── loop.py                 # 부모 ReAct 루프 — turn() 핵심 로직 + 서브에이전트 라우팅
+│   ├── subagent.py             # 격리 in-process 서브에이전트 (Phase 3 신규)
+│   ├── tools.py                # execute_tool, validate_args, list_skills 메타 도구
+│   ├── skill_loader.py         # SKILL.md 카탈로그 로더 (Phase 2 신규)
+│   ├── workflow_retriever.py   # 키워드 + LLM 분류기 + 프론트매터 로드
+│   ├── llm.py                  # call_ai(system_prompt, user_prompt, temperature) — 시그니처 고정
+│   ├── web.py                  # Flask + SSE 웹 UI
+│   └── utils.py                # load_file, cached_file, log
 │
-├── runner/                         # 실행 엔진
-│   ├── run.py                      # 진입점 — run() API + interactive_loop()
-│   ├── loop.py                     # ReAct 아gentic 루프 — turn() 핵심 로직
-│   ├── tools.py                    # 도구 정의(TOOL_DEFINITIONS) + execute_tool() + get_tool_descriptions()
-│   ├── workflow_retriever.py       # 워크플로우 검색 (키워드 / 임베딩)
-│   ├── llm.py                      # LLM API 래퍼 — 모델명·엔드포인트 설정 (수정 금지)
-│   └── utils.py                    # load_file(), cached_file(), log()
+├── skills/                     # 33개 스킬 (Phase 2 재편)
+│   ├── hr_data/<name>/SKILL.md + tool.py    (5개)
+│   ├── hr_text/<name>/SKILL.md + prompt.md  (5개)
+│   ├── hr_writing/<name>/SKILL.md + ...     (5개)
+│   ├── hr_eval/<name>/...                   (2개)
+│   ├── hr_knowledge/<name>/...              (3개)
+│   ├── report/<name>/...                    (10개)
+│   └── misc/<name>/...                      (3개)
 │
-├── agents/                         # 워크플로우 정의
-│   ├── agent_registry.json         # 워크플로우 메타데이터 + trigger_keywords + 임베딩 캐시
-│   └── definitions/                # 워크플로우 상세 절차 문서
-│       ├── leave_intake.md             # 휴직 접수
-│       ├── recruitment_intake.md       # 채용 요청 접수
-│       ├── onboarding_intake.md        # 온보딩 접수
-│       └── job_description_writing.md  # 직무기술서 작성
+├── agents/                     # 11개 워크플로우
+│   ├── agent_registry.json     # 키워드 + description (분류기용)
+│   └── definitions/            # 프론트매터 + 본문 (Phase 3 갱신)
+│       ├── leave_intake.md
+│       ├── recruitment_intake.md
+│       └── ... (총 11개)
 │
-├── skills/
-│   ├── worker_prompts/             # LLM 도구별 실행 프롬프트
-│   │   ├── translate_skill.md
-│   │   ├── jd_generator_skill.md
-│   │   └── ... (13개)
-│   └── tools/                      # Python 함수형 도구
-│       ├── calculator_tool.py
-│       ├── employee_lookup_tool.py
-│       ├── candidate_lookup_tool.py
-│       └── new_employee_lookup_tool.py
+├── prompts/
+│   └── system_prompt.md        # 페르소나 + 도구 사용 규칙 + list_skills 가이드
 │
-└── prompts/
-    └── system_prompt.md            # AI 역할·도구 사용 규칙·워크플로우 원칙
+└── scripts/                    # 1회용 마이그레이션 (Phase 2/3)
+    ├── migrate_skills.py       # tools/ + worker_prompts/ → 카테고리 구조로 이동
+    └── migrate_workflows.py    # 11개 .md에 프론트매터 삽입
 ```
-
----
-
-## 도구 목록 (13개)
-
-### Python 함수형 도구 (4개)
-
-| 도구 | 설명 | 필수 파라미터 |
-|------|------|--------------|
-| `calculator` | 사칙연산 계산 | `num1`, `num2`, `operator` (+/-/*//) |
-| `employee_lookup` | 직원 이름으로 인사 정보 조회 | `employee_name` |
-| `candidate_lookup` | 후보자 ID(C-001 형식)로 지원자 정보 조회 | `candidate_id` |
-| `new_employee_lookup` | 신규 입사자 ID(N-YYYY-001 형식)로 정보 조회 | `employee_id` |
-| `mail_url_generator` | 메일 작성 화면을 미리 채워서 여는 mailto: URL 생성 | `subject`, `body` |
-| `leave_balance_calculator` | 직원 잔여 연차 계산 (입사일·사용일 기준) | `employee_name` 또는 `join_date` |
-| `expense_calculator` | 출장비 견적 (도시·교통·일수·직급 단가 기반) | `destination`, `days` |
-
-### LLM 생성형 도구 (9개)
-
-| 도구 | 설명 |
-|------|------|
-| `translate` | 텍스트를 지정 언어로 번역 (한·영·일·중 등) |
-| `summarize` | 텍스트를 원문 30% 이내로 요약 |
-| `extract` | 핵심 키워드/항목 최대 5개 추출 |
-| `vacation_parser` | 휴가 신청 텍스트에서 이름·기간·사유 구조화 |
-| `jd_generator` | 직무 정보 → 채용 공고(JD) 마크다운 초안 생성 |
-| `resume_parser` | 자유 형식 이력서 → 학력·경력·기술 구조화 |
-| `jd_resume_match_score` | JD ↔ 이력서 매칭 점수(0~100) + 강점/약점 평가 |
-| `offer_letter_drafter` | 합격자 정보 → 오퍼레터(처우 제안서) 초안 작성 |
-| `onboarding_checklist_generator` | 입사자 정보 → 입사 1주차 체크리스트(5개 카테고리) |
-| `poster_html_generator` | 교육·행사 입과 안내 HTML 포스터 생성 (웹 UI에서 미리보기 자동 렌더링) |
-| `offboarding_checklist_generator` | 퇴사자 정보 → 인수인계·계정회수·자료정리·정산·작별 5개 카테고리 체크리스트 |
-| `announcement_writer` | 사내 공지문(이메일·슬랙·게시판)을 주제·톤·대상에 맞춰 작성 |
-| `performance_review_template_generator` | 직급·부서·평가종류에 맞춘 인사 평가 양식 (섹션·가중치·문항) 자동 설계 |
-| `labor_law_qa` | 한국 노동법(근로기준법·남녀고용평등법 등) Q&A — 법령 조항 기반 답변 |
-| `hr_etiquette` | 한국 직장 커뮤니케이션·매너 조언 (메일·메신저·대면 권장 표현) |
-| `salary_advice` | 한국 IT/서비스 업계 보상 시장 수준·협상 조언 |
-| `report_brief_analyzer` | 보고서 의도 분석 — 짧은 요청을 받아 주제·청중·핵심 질문 정리 |
-| `background_research` | 보고서 주제의 배경·시장 맥락·트렌드·핵심 사실 자동 조사 |
-| `audience_analyzer` | 대상 청중에 맞는 톤·강조점·예상 질문 분석 |
-| `key_message_extractor` | 자료에서 핵심 메시지 3~5개 우선순위와 함께 추출 |
-| `storytelling_arc` | 보고서 스토리 흐름(SCQA·피라미드 등) 설계 |
-| `report_outline_generator` | 슬라이드별 상세 개요(제목·핵심 메시지·레이아웃) 생성 |
-| `slide_content_enricher` | 한 슬라이드의 짧은 메모를 풍성한 본문·불릿·아이콘 추천으로 보강 |
-| `data_visualization_recommender` | 데이터 유형에 맞는 차트·인포그래픽 종류 추천 |
-| `html_slide_deck_generator` | 완성된 HTML PPT 슬라이드 덱 출력 (방향키 네비게이션, 13가지 레이아웃) |
-| `speaker_notes_generator` | 슬라이드별 1~2분 발표 스크립트 작성 |
-
----
-
-## 워크플로우 목록 (4개)
-
-워크플로우는 대화에 하드코딩하지 않습니다. 사용자 입력에서 관련 키워드가 감지되면 해당 워크플로우 정의(`agents/definitions/*.md`)가 자동으로 대화에 주입됩니다.
-
-| 워크플로우 ID | 이름 | 주요 트리거 키워드 | 사용 도구 |
-|---|---|---|---|
-| `leave_intake` | 휴직 접수 | 휴직, 육아휴직, 병가, 복직 | `employee_lookup` |
-| `recruitment_intake` | 채용 요청 접수 | 채용, 공고, 포지션, 지원자 | `jd_generator`, `resume_parser`, `jd_resume_match_score`, `offer_letter_drafter`, `candidate_lookup` |
-| `onboarding_intake` | 온보딩 접수 | 온보딩, 입사, 신규 입사자 | `onboarding_checklist_generator`, `new_employee_lookup`, `candidate_lookup` |
-| `job_description_writing` | 직무기술서 작성 | 직무기술서, JD, 직무 설명 | — |
-| `training_admission_intake` | 교육 입과 안내 | 교육 입과, 포스터, 교육 안내, 세미나 | `poster_html_generator`, `mail_url_generator` |
-| `report_writing` | 보고서·PPT 작성 | 보고서, PPT, 슬라이드, 발표 자료, 기획안, 제안서 | `report_brief_analyzer`, `background_research`, `audience_analyzer`, `key_message_extractor`, `storytelling_arc`, `report_outline_generator`, `slide_content_enricher`, `data_visualization_recommender`, `html_slide_deck_generator`, `speaker_notes_generator` |
-| `vacation_request` | 연차/휴가 신청 | 휴가 신청, 연차 신청, 반차, 잔여 휴가 | `leave_balance_calculator`, `mail_url_generator` |
-| `offboarding_intake` | 퇴사 접수 | 퇴사, 퇴직, 이직, 인수인계, 퇴직금 | `employee_lookup`, `offboarding_checklist_generator`, `leave_balance_calculator`, `mail_url_generator` |
-| `business_trip_request` | 출장 신청 | 출장, 출장비, 출장계획서, business trip | `expense_calculator`, `mail_url_generator` |
-| `performance_review` | 인사 평가 진행 | 인사 평가, 자기평가, 동료평가, 다면평가 | `performance_review_template_generator`, `announcement_writer` |
-| `health_checkup_intake` | 건강검진 안내 | 건강검진, 검진 안내, 종합검진 | `announcement_writer`, `mail_url_generator`, `employee_lookup` |
-
----
-
-## 동적 워크플로우 주입 원리
-
-워크플로우 검색은 **2단계 분류**로 동작합니다 (임베딩 미사용):
-
-```
-사용자: "휴직 신청하고 싶어요"
-         │
-         ▼
-[1단계] 키워드 매칭 (workflow_retriever._keyword_search)
-  trigger_keywords substring 검사 → "휴직" 매칭 → ["leave_intake"]
-         │  매치 있음 → 즉시 반환 (LLM 호출 없음, 빠름)
-         ▼
-messages에 주입:
-  {"role": "user",      "content": "[워크플로우 컨텍스트 로드: leave_intake]\n...절차 전문..."}
-  {"role": "assistant", "content": "네, 해당 워크플로우 절차를 참고하겠습니다."}
-         │
-         ▼
-모델이 leave_intake 절차에 따라 단계별 안내 시작
-```
-
-```
-사용자: "직원이 좀 오래 쉬고 싶어해요" (간접 표현)
-         │
-         ▼
-[1단계] 키워드 매칭 → 매치 없음
-         │
-         ▼
-[2단계] LLM 분류기 (workflow_retriever._llm_classify)
-  모든 워크플로우 description을 call_ai에 전달:
-    "사용자 발화: 직원이 좀 오래 쉬고 싶어해요
-     아래 목록에서 가장 적합한 ID 또는 'none' 반환:
-     - leave_intake: 직원의 휴직 면담부터 발령까지...
-     - recruitment_intake: 채용 요청 접수...
-     ..."
-  → LLM 응답: "leave_intake"
-         │
-         ▼
-messages 주입 → 절차 안내
-```
-
-```
-사용자: "안녕?" (일반 인사)
-         │
-         ▼
-[1단계] 키워드 매칭 → 매치 없음
-         │
-         ▼
-[2단계] LLM 분류기 → 'none' 반환 → 빈 리스트
-         │
-         ▼
-워크플로우 주입 없이 일반 대화 모드로 진행
-```
-
-**워크플로우 전환**: 진행 중에 다른 워크플로우 키워드/의도가 나오면 새 워크플로우가 주입되고, 이전 워크플로우 컨텍스트는 `messages`에 유지되므로 돌아와서 이어갈 수 있습니다.
 
 ---
 
 ## API 사용법
 
-### 단일 턴
+### `state` 기반 (권장 — Phase 3)
+
 ```python
 from runner.run import run
 
-result = run("1234 + 5678")
-print(result["message"])   # "1234와 5678을 더하면 6912입니다."
+state = {
+    "messages": [],
+    "injected_workflows": set(),
+    "active_subagent": None,
+    "subagent_history": [],
+    "last_tool_events": [],
+    "last_artifacts": [],
+}
+
+# Turn 1
+res = run("휴직 신청하고 싶어요", state=state)
+print(res["message"])
+# → "직원 이름과 휴직 사유, 희망 시작일을 알려주세요."
+print(state["active_subagent"]["workflow_id"])
+# → "leave_intake"  (서브에이전트 활성화됨)
+
+# Turn 2
+res = run("김철수, 육아휴직, 2025-04-01", state=state)
+print(res["message"])
+# → "받았습니다. 다음으로 사유별 서류를 안내드릴게요."
+
+# Turn 3 (서브에이전트가 종료 태그 출력)
+res = run("진행해주세요", state=state)
+print(state["active_subagent"])         # → None (종료됨)
+print(state["subagent_history"])        # → [{"workflow_id":"leave_intake","summary":"...","step_count":3,"tools_used":["employee_lookup"]}]
 ```
 
-### 멀티턴 (상태 유지)
+### 레거시 시그니처 (백워드 호환)
+
 ```python
-from runner.run import run
-
-messages = []
-injected_workflows = set()
-
-# 첫 번째 턴
-result = run("휴직 신청하고 싶어요", messages=messages, injected_workflows=injected_workflows)
-messages = result["messages"]
-injected_workflows = result["injected_workflows"]
-print(result["message"])   # 첫 단계: 직원 이름과 휴직 사유를 묻는 응답
-
-# 두 번째 턴 (상태 이어서)
-result = run("김철수, 육아휴직입니다", messages=messages, injected_workflows=injected_workflows)
-messages = result["messages"]
-injected_workflows = result["injected_workflows"]
-print(result["message"])   # 다음 단계 안내
+res = run("안녕하세요", messages=[], injected_workflows=set())
+print(res["message"])
 ```
 
 ### `run()` 반환값
 
 ```python
 {
-    "success": bool,              # 처리 성공 여부
-    "message": str,               # AI 응답 텍스트
-    "messages": list,             # 갱신된 대화 히스토리 (다음 턴에 전달)
-    "injected_workflows": set,    # 이미 주입된 워크플로우 ID 집합 (다음 턴에 전달)
+    "success": bool,
+    "message": str,                  # 사용자 노출 텍스트
+    "messages": list,                # 부모 messages (in-place 갱신)
+    "injected_workflows": set,       # (레거시 — Phase 3에선 사실상 미사용)
+    "active_subagent": dict | None,  # 진행 중인 서브에이전트 상태
+    "tool_events": list,             # 직전 턴의 도구 호출 이벤트
+    "artifacts": list,               # 직전 턴에 회수된 HTML 등
+    "subagent_history": list,        # 종료된 워크플로우 audit trail
 }
 ```
 
 ---
 
-## 모델 및 엔드포인트 설정
+## 웹 UI
 
-LLM 호출은 모두 `runner/llm.py`의 **`call_ai()` 함수 하나**를 통해서 수행됩니다. **이 함수만 교체**하면 모델·엔드포인트·SDK를 바꿀 수 있습니다 (`loop.py`와 모든 LLM 도구가 동일하게 사용).
+```bash
+python runner/web.py                     # 0.0.0.0:5000
+python runner/web.py --port 8080
+python runner/web.py --host 127.0.0.1
+```
 
-### `call_ai` 함수 시그니처
+특징:
+- **단계 스택** — 도구 호출·서브에이전트 위임을 접기·펼치기 가능한 카드로 표시 (기본은 접힘)
+- **실시간 SSE** — `tool_call`/`tool_result`/`subagent_started`/`subagent_finished`/`ai_response` 이벤트
+- **HTML 미리보기** — `<!DOCTYPE html>` 응답 자동 iframe 렌더링
+- **메일 링크** — `mail_url_generator` 결과를 클릭 가능한 카드로
+- **답변 칩** — AI 응답 후 사용자가 보낼 만한 답변 추측 (LLM 1회 추가)
+
+운영 환경:
+```bash
+pip install gunicorn
+gunicorn -b 0.0.0.0:5000 -w 1 --threads 4 runner.web:app
+```
+(SSE 특성상 worker 1 + threads N 권장)
+
+---
+
+## 모델 교체
+
+LLM 호출은 모두 `runner/llm.py`의 **`call_ai()` 함수 하나**를 통해 수행됩니다. 다음 시그니처는 **절대 변경하지 마세요** — 변경하면 `loop.py` / `subagent.py` / 모든 LLM 도구가 깨집니다.
 
 ```python
 def call_ai(system_prompt: str, user_prompt: str, temperature: float = 0) -> str:
-    """
-    system_prompt: 모델 지시사항(역할·도구 형식·워크플로우 원칙 등)
-    user_prompt:   사용자 입력 또는 직렬화된 대화 히스토리
-    반환:          모델 응답 텍스트 (실패 시 빈 문자열)
-    """
+    """반환: 모델 응답 텍스트 (실패 시 빈 문자열)"""
 ```
 
-> `loop.py`는 다중 턴 messages 리스트를 `_serialize_messages()`로 단일 문자열로 묶어
-> `user_prompt`로 전달합니다. LLM 도구(`translate`, `summarize` 등)는 skill 프롬프트를
-> `system_prompt`로, 인자 JSON을 `user_prompt`로 전달합니다.
-
-### 자체 호스팅 모델 연결 예시 (requests 사용)
+### 자체 호스팅 모델 (requests 기반 예시)
 
 ```python
 # runner/llm.py
@@ -390,71 +421,88 @@ def call_ai(system_prompt: str, user_prompt: str, temperature: float = 0) -> str
         return ""
 ```
 
-이렇게 하면 `openai` 패키지 없이도 동작합니다. Function calling과 system role을 지원하지 않는 모델(Gemma, Llama 등)도 그대로 사용 가능합니다.
+`openai` 패키지 없이 동작하며 Function calling·system role 미지원 모델(Gemma, Llama 등)도 그대로 사용 가능합니다.
 
-> **Python 3.8 호환**: 코드는 `typing.Optional`, `typing.List`만 사용하므로 Python 3.8 이상에서 동작합니다.
-
----
-
-## 새 워크플로우 추가
-
-1. **`agents/definitions/{workflow_id}.md`** 생성
-   - 역할·목적·단계별 절차·주의사항을 자유 형식으로 작성
-
-2. **`agents/agent_registry.json`** 항목 추가
-   ```json
-   {
-     "agent_id": "my_workflow",
-     "name": "내 워크플로우",
-     "description": "워크플로우 설명 (임베딩 검색에 사용)",
-     "trigger_keywords": ["키워드1", "키워드2"],
-     "embedding": null
-   }
-   ```
-
-3. 다음 실행부터 자동으로 키워드 매칭 대상에 포함됩니다.
-   임베딩 캐시가 필요하면 위 **임베딩 검색 활성화** 섹션의 스크립트를 실행합니다.
+> **Python 3.8 호환**: `typing.Optional`, `typing.List`만 사용하므로 3.8 이상에서 동작.
 
 ---
 
 ## 새 도구 추가
 
-### Python 함수형 도구
+### Python 함수형
 
-1. **`skills/tools/{tool_name}_tool.py`** 생성
-   ```python
-   def execute(params: dict):
-       # params에서 필요한 값 추출 후 처리
-       return {"result": "..."}
-   ```
+```bash
+mkdir -p skills/<category>/<my_tool>
+```
 
-2. **`runner/tools.py`**의 `TOOL_DEFINITIONS`에 정의 추가
-   ```python
-   {
-       "type": "function",
-       "function": {
-           "name": "my_tool",
-           "description": "도구 설명",
-           "parameters": {
-               "type": "object",
-               "properties": {
-                   "param1": {"type": "string", "description": "설명"},
-               },
-               "required": ["param1"],
-           },
-       },
-   }
-   ```
+`skills/<category>/<my_tool>/tool.py`:
+```python
+def execute(params: dict):
+    return {"result": "..."}
+```
 
-3. **`runner/tools.py`**의 `_PYTHON_TOOLS` 집합에 도구 이름 추가
-   ```python
-   _PYTHON_TOOLS = {"calculator", "employee_lookup", ..., "my_tool"}
-   ```
+`skills/<category>/<my_tool>/SKILL.md`:
+```markdown
+---
+{
+  "name": "my_tool",
+  "category": "<category>",
+  "type": "python",
+  "display_ko": "내 도구",
+  "description": "도구 설명",
+  "trigger_keywords": [],
+  "parameters": {
+    "type": "object",
+    "properties": {"param1": {"type": "string", "description": "..."}},
+    "required": ["param1"]
+  }
+}
+---
 
-### LLM 생성형 도구
+# 내 도구
 
-1. **`skills/worker_prompts/{tool_name}_skill.md`** 생성 (실행 프롬프트)
-2. **`runner/tools.py`**의 `TOOL_DEFINITIONS`에 정의 추가 (`_PYTHON_TOOLS`에는 추가하지 않음)
+(본문)
+```
+
+→ 다음 실행부터 자동 등록. `runner/tools.py`나 `web.py` 수동 갱신 **불필요**.
+
+### LLM 생성형
+
+같은 디렉터리 구조에 `tool.py` 대신 `prompt.md`(LLM에 전달할 system prompt)를 두고 `SKILL.md`의 `type`을 `"llm"`으로 설정하면 끝.
+
+---
+
+## 새 워크플로우 추가
+
+`agents/definitions/<my_workflow>.md`:
+```markdown
+---
+{
+  "id": "my_workflow",
+  "display_ko": "내 워크플로우",
+  "categories": ["hr_data", "hr_writing"],
+  "max_turns": 15,
+  "mode": "dialog"
+}
+---
+
+# 내 워크플로우 안내
+
+(절차·원칙 자유 작성)
+```
+
+`agents/agent_registry.json`에 항목 추가:
+```json
+{
+  "agent_id": "my_workflow",
+  "name": "내 워크플로우",
+  "description": "워크플로우 설명 (LLM 분류기에 사용)",
+  "trigger_keywords": ["키워드1", "키워드2"],
+  "embedding": null
+}
+```
+
+→ 다음 실행부터 키워드 매칭 → 서브에이전트 자동 위임으로 동작.
 
 ---
 
@@ -463,27 +511,43 @@ def call_ai(system_prompt: str, user_prompt: str, temperature: float = 0) -> str
 ```bash
 # 일반 대화
 python runner/run.py "안녕하세요"
-# → 자연스러운 인사 응답 (<tool_call> 없음)
+# → 자연스러운 인사 + 다음 행동 제안
 
-# 계산 도구
+# 단일 도구
 python runner/run.py "1234 더하기 5678"
 # → calculator 호출 → "합계는 6912입니다."
 
-# 직원 조회
-python runner/run.py "홍길동 직원 정보 알려줘"
-# → employee_lookup 호출 → 인사 정보 안내
+# 다중 도구 동시 호출
+python runner/run.py "홍길동 잔여 휴가랑 부산 2박 3일 출장비 같이 알려줘"
+# → leave_balance_calculator + expense_calculator 동시 실행 → 종합 답변
 
-# 슬롯 필링 (필수 파라미터 없을 때)
+# 슬롯 필링
 python runner/run.py "직원 조회해줘"
-# → 도구 호출 없이 "어느 직원을 조회할까요? 이름을 알려주세요." 응답
+# → 도구 호출 없이 "어느 직원을 조회할까요?" 질문
 
-# 워크플로우 시작
+# 워크플로우 (서브에이전트 자동 위임)
 python runner/run.py "휴직 신청하고 싶어요"
-# → leave_intake 워크플로우 주입 → 첫 단계 안내
+# → leave_intake 서브에이전트 시작 → 단계별 안내
 
-# 번역 (LLM 도구)
+# LLM 도구
 python runner/run.py "이 문장을 영어로 번역해줘: 안녕하세요"
 # → translate 호출 → "Hello."
+```
+
+---
+
+## 마이그레이션 스크립트
+
+기존(레거시 `skills/tools/`·`skills/worker_prompts/` + 프론트매터 없는 워크플로우 .md)에서 신규 구조로 이전할 때:
+
+```bash
+# Phase 2: skills/<category>/<name>/SKILL.md 구조로 이동
+python scripts/migrate_skills.py --dry-run    # 계획 출력
+python scripts/migrate_skills.py              # 실제 이동
+
+# Phase 3: 11개 워크플로우 .md에 JSON 프론트매터 삽입 (멱등)
+python scripts/migrate_workflows.py --dry-run
+python scripts/migrate_workflows.py
 ```
 
 ---
@@ -496,11 +560,28 @@ pip install -r requirements.txt
 
 | 패키지 | 필수 여부 | 용도 |
 |---|---|---|
-| `requests` | **필수** | 자체 호스팅 모델 호출 (llm.py에서 사용) |
-| `flask` | 웹 UI 사용 시 필수 | `runner/web.py` 웹 서버 |
+| `requests` | **필수** | 자체 호스팅 모델 호출 |
+| `flask` | 웹 UI 사용 시 필수 | `runner/web.py` |
 | `python-dotenv` | 선택 | `.env` 파일에서 API 키 자동 로드 |
 | `openai` | 선택 | Google AI Studio 등 OpenAI 호환 엔드포인트를 쓸 때만 |
 
-> **`loop.py`는 어떤 LLM SDK도 직접 import하지 않습니다.** 모든 LLM 호출은 `runner/llm.py`를 통해 이루어지므로, llm.py만 자체 모델용으로 교체하면 됩니다.
->
-> 워크플로우 분류는 키워드 매칭(1차) + LLM 분류기(2차)를 사용하므로 별도 임베딩 SDK(`google-genai` 등)가 필요 없습니다.
+> **`loop.py` / `subagent.py`는 어떤 LLM SDK도 직접 import하지 않습니다.** 모든 LLM 호출은 `runner/llm.py`의 `call_ai()`를 통해 이루어지므로 `llm.py`만 자체 모델용으로 교체하면 됩니다.
+
+---
+
+## 핵심 파일 한눈에 보기
+
+| 파일 | 역할 | 시그니처 변경 |
+|---|---|---|
+| `runner/llm.py` | LLM 호출 단일 진입점 | **금지** (자체 모델 환경에서 보호됨) |
+| `runner/loop.py` | 부모 ReAct 루프 + 서브에이전트 라우팅 | 자유 |
+| `runner/subagent.py` | 격리 in-process 서브에이전트 | 자유 |
+| `runner/tools.py` | 도구 디스패치, `validate_args`, `list_skills` 메타 | 자유 |
+| `runner/skill_loader.py` | SKILL.md 카탈로그 로더 | 자유 |
+| `runner/workflow_retriever.py` | 워크플로우 매칭 + 프론트매터 로드 | 자유 |
+
+---
+
+## 한 줄 정리
+
+> **부모 루프**가 일반 대화·단발 도구를 처리하고, **워크플로우는 서브에이전트로 격리**되어 부모 컨텍스트를 보호합니다. 도구는 **카테고리로 묶어 lazy 노출**하고, 한 응답에 **여러 호출을 동시에** 보낼 수 있으며, 잘못된 인자는 모델이 스스로 교정합니다. 모든 LLM 호출은 `runner/llm.py`의 `call_ai()` 하나만 거치므로 자체 호스팅 모델로 손쉽게 교체할 수 있습니다.
